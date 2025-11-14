@@ -1,0 +1,8 @@
+go.sum
+.idea
+*.a
+*.exe
+*.log
+*.sum
+vendor
+pkg

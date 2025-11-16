@@ -6,6 +6,4 @@ go.sum
 *.sum
 vendor
 pkg
-*.wasm
-*/*.wasm
-deploy_dev/main.wasm
+**/*.wasm

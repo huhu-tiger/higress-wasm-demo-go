@@ -62,7 +62,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config MyConfig, body []byte) ty
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config MyConfig) types.Action {
-	proxywasm.AddHttpResponseHeader("x-wasm-demo", "enabled")
+	proxywasm.AddHttpResponseHeader("x-wasm-demo", "hello world2")
+
 	if config.mockEnable {
 		proxywasm.AddHttpResponseHeader("x-wasm-mock", "true")
 	}

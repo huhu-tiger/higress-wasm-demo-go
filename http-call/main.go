@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -68,8 +69,15 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config MyConfig) types.Action
 	log.Infof("HTTP call start, cluster: %s, requestPath: %s", config.client.ClusterName(), "/echo/post")
 	err := config.client.Post("/posts", [][2]string{}, []byte(`{"message": "hello from wasm"}`), func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Infof("HTTP call response: status=%d, body=%s", statusCode, string(responseBody))
-		// Add response to request headers for downstream
-		proxywasm.AddHttpRequestHeader("X-External-Response", "resp-body")
+
+		// 在回调函数中添加响应头（此时响应头处理阶段还未结束，可以添加）
+		if statusCode >= 200 && statusCode < 300 {
+			proxywasm.AddHttpResponseHeader("X-External-Response", "HTTP call success")
+			proxywasm.AddHttpResponseHeader("X-External-Status", fmt.Sprintf("%d", statusCode))
+		} else {
+			proxywasm.AddHttpResponseHeader("X-External-Response", "HTTP call failed")
+			proxywasm.AddHttpResponseHeader("X-External-Status", fmt.Sprintf("%d", statusCode))
+		}
 
 		// ResumeHttpRequest() 的作用是恢复主请求的处理流程。
 		// 当我们发起外部 HTTP 调用后，会暂停主请求（即 Envoy/WASM 处理流程被挂起），
@@ -79,6 +87,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config MyConfig) types.Action
 	if err != nil {
 		log.Errorf("HTTP call failed: %v", err)
 		return types.ActionContinue
+	} else {
+		// 将 HTTP call 成功信息存储到 ctx 中，以便在响应头处理阶段使用
+		ctx.SetUserAttribute("X-External-Response", "HTTP call success")
 	}
 	return types.HeaderStopAllIterationAndWatermark // 暂停主请求的处理流程，等待HTTP回调处理完成
 }
@@ -94,9 +105,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config MyConfig, body []byte) ty
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config MyConfig) types.Action {
-	proxywasm.AddHttpResponseHeader("x-wasm-demo", "enabled")
+	proxywasm.AddHttpResponseHeader("x-wasm-demo", "this is http-call plugin")
 	if config.mockEnable {
 		proxywasm.AddHttpResponseHeader("x-wasm-mock", "true")
+	}
+	// 从 ctx 中获取 X-External-Response 的值
+	externalResponse, ok := ctx.GetUserAttribute("X-External-Response").(string)
+	if ok && externalResponse != "" {
+		proxywasm.AddHttpResponseHeader("X-External-Response", externalResponse)
 	}
 	log.Info("[4] onHttpResponseHeaders -> HeaderContinue: 响应头继续发送给客户端")
 	return types.HeaderContinue

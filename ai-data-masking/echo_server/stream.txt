@@ -1,0 +1,65 @@
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"gAAAAABpRrPk1_nXNVHeyqS-sE18aNaCndEHeSr6oYd17S1f_wleGYDPE6cUnlnVKJbDhBqJWM0FYo7q2OfWj6KH0clO28cPRkMTqB2AVZ-g9L1KxPYJkAQf7cBIqvGNQq85kk-S_3h_ADVVXDG2Rbon0Se7n7Z8rZ-RdPHKsjG5MI9c0_pbTSjZdQDkXAyxYFqwxjA802tnK4wRz5W-HoLGdn4dpoPaaDKCvDlc1OXb-m-7ymo4qblvGePAfS1i2234RkW3OAYvMwlK5fDTaLFfPsD1apPe1AWopjyIp2RHEI5gaoMm9Tm2NeUOiKGiCXohFAipmmQiVFfYTqZcnuQ9YkL1zE3ZMYhHiqDNa6WzncAI5hXkDy5FHQQXBOZoELev7FW2m9Q_vCWYkYKw40bBu2uOOR4we2wwZ4hx8kqVs3hu87yYSZNVPPCKxUygDxQL22vDLgLaP0sQB1Bl60AXXzFXpHhPw_7_FpHx72iQnn1jkJqAkeLqApWAQSmkeIUUAE1m8_8lJoq2tHzpEzG6RL3gLS3XDhJHO0KOqmHpSjajtPfCKKSYAYMzpz4mYBaRRk379AzdzGRCqTHhfwhD8cNiowdfAtCj9R2ReQ12zpwYW4WdPB-DDaQeJPDJJKaX0r-bSCFcyIT5LBuSOdm3RTT7ENZEp8kRQQxoB9QNdzblawchkptz3l_An64xkDmd3DZamxvENLPxSaWqT65VoVm7BCjXR4enWuyVYdckVKBzkTHxMjc33CjK9bABkTDxl0QX1XHEXZQhZNINq3njCNLuXjI8ehnDJIIT_3cofKIgvh4bS__C7HgKnjPE9tS7Fw55GCtKEFOnoXgt0X2EvdM3oi408ARdMpzzEmTZX-mzuxCYznkZIl2lF1db590ZCKdwiSWTNwnw0Fm42bHUK87RDlc2Uou6dDoaRLptNUxsUZFGysy5ukf17X72WLlkL5gq3r73QN_WPoMGUZYYIFujJ93yJScPPbssbjB9MifcknP26uy5JswjZ68szgxvzIDoVOPU0c3qd4Dcxg6mIJAsHdd_qk2eEciWwLvBkYbW6MeUtEtTag1ojSL3HoCc1Tl_JtLU2ZRk4fNk4KYsgDkFW0Tjt4jzSjoaVcn5YV3YwObJ9jYcMRAHiMkV_gt6Lj3YjMIGH8pCsjdZmfUBma0q-UtL5Yvjn3JVSYzRsSi31DOP81O7TxXXAn6CKGvzL1zegwpU9XrYuMw0Keoy37uX9sFUtk9qW7gt6bOXkzXp3CypTvTxi_b3Q0Z56WwA_moak-1Ad4EurvmL2x7Z7IINxhgSGkc1uWGopLTJHJ-WBZYC1l9sJ2LCLXrOBKiwXL9YuiLGr4bCKSbk2hZiXzStnWEXkXSc4vZbzANginjd25T49ZYYsjVAkAx9Lret7zTR_tqKQVHTn25j7Ixeas9CLLvjS4_EqgpZDhBDxhJxguxOV_6Z5or7bcHXeEkYAZa7iRW5F550oyOtYMcSfbnFlytWTlE4jckk4bTvQ_4xhFcnu_pG2XoJ-IJEpuvnfIuwX-l0b-FoZrGJX6xzb5FfdIrFE_7NqRTdrW_4ADEMuagkwhUnkNUqU-JMCzgdifQZKATVo7Ci7UH86rdTyoGJ_KKawYUcejz5zDOeemXPpdtjRNbmSC3s8QYuYCc5nEuz_OND0L0diIaZpPTcMRZcQNFkAsVLVIrXhojVa1ZY9oS2j6RwOYYXw8Dy0HfVgeccVGbRWaZno9WkwxgZ4GXkcjDsI75KVcHOHX58Oq0YzAu9GqBf2WU7ojHRaENQQNiBN8Zf3cI9jTFl9NL_uFpXJoHciKvJ9zfN2WR0AlnZbN09Erg64oQ7y35OH71tmSt_Ca5ClM5xEEg2JQM2WghSumD4Zg==","id":"rs_0e3b087b372d3acc016946b3e2976c8193ba286069f9d9e4fa","format":"openai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"我的"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"知识"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"截至"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"到"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":" "},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"202"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"4"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":" 年"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":" "},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"10"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":" 月"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"。"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"之后"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"发生"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"的"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"事件"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"或"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"更新"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"可能"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"不"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"完全"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"准确"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"违规"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"内容"},"finish_reason":"stop","native_finish_reason":"completed","logprobs":null}]}
+
+data: {"id":"gen-1766241250-OJEj7xHH5fOkHbqZno8p","provider":"Azure","model":"openai/gpt-5","object":"chat.completion.chunk","created":1766241250,"choices":[{"index":0,"delta":{"role":"assistant","content":"。"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}],"usage":{"prompt_tokens":12,"completion_tokens":157,"total_tokens":169,"cost":0.001585,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":null,"upstream_inference_prompt_cost":0.000015,"upstream_inference_completions_cost":0.00157},"completion_tokens_details":{"reasoning_tokens":128,"image_tokens":0}}}
+
+data: [DONE]
+

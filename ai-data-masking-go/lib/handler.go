@@ -565,7 +565,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 // 缓冲10个最近的chunk，检测到敏感词则替换后一次性返回，没有检测到敏感词则正常返回
 // 缓冲区满或没有敏感词则返回，并清空缓冲区
 func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) []byte {
-	const bufferChunkCount = 10 // 缓冲10个chunk
+	const bufferChunkCount = config.MaxBufferChunkCount
 
 	// 初始化缓冲区
 	if pluginCtx.StreamChunkBuffer == nil {

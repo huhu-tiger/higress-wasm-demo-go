@@ -6,6 +6,7 @@ import (
 
 const (
 	DEFAULT_MAX_BODY_BYTES uint32 = 100 * 1024 * 1024
+	MaxBufferChunkCount    uint32 = 30
 )
 
 const (

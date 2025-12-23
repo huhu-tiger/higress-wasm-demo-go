@@ -2,10 +2,10 @@ package lib
 
 import (
 	"ai-data-masking/config"
+	"ai-data-masking/wlog"
 	"sync"
 
 	"github.com/cloudflare/ahocorasick"
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 )
 
 const pluginName = "ai-data-masking"
@@ -46,7 +46,7 @@ func checkNonStream(message string, config *config.AiDataMaskingConfig, systemDe
 		if len(matches) > 0 {
 			// matches 返回的是匹配的字典索引，我们需要找到对应的敏感词
 			matchedWord := config.DenyWords[matches[0]]
-			proxywasm.LogWarnf("[%s] checkNonStream custom deny word %s matched from %s", pluginName, matchedWord, message)
+			wlog.LogWithLine("[%s] checkNonStream custom deny word %s matched from %s", pluginName, matchedWord, message)
 			return true
 		}
 	}
@@ -58,7 +58,7 @@ func checkNonStream(message string, config *config.AiDataMaskingConfig, systemDe
 		if len(matches) > 0 {
 			// matches 返回的是匹配的字典索引
 			matchedWord := systemDenyWords[matches[0]]
-			proxywasm.LogWarnf("[%s] system deny word %s matched from %s", pluginName, matchedWord, message)
+			wlog.LogWithLine("[%s] system deny word %s matched from %s", pluginName, matchedWord, message)
 			return true
 		}
 	}
@@ -81,7 +81,7 @@ func checkStream(chunk string, config *config.AiDataMaskingConfig, systemDenyWor
 		if len(matches) > 0 {
 			// matches 返回的是匹配的字典索引
 			matchedWord := config.DenyWords[matches[0]]
-			proxywasm.LogWarnf("[%s] [stream] custom deny word %s matched from chunk: %s", pluginName, matchedWord, chunk)
+			wlog.LogWithLine("[%s] [stream] custom deny word %s matched from chunk: %s", pluginName, matchedWord, chunk)
 			return true
 		}
 	}
@@ -93,7 +93,7 @@ func checkStream(chunk string, config *config.AiDataMaskingConfig, systemDenyWor
 		if len(matches) > 0 {
 			// matches 返回的是匹配的字典索引
 			matchedWord := systemDenyWords[matches[0]]
-			proxywasm.LogWarnf("[%s] [stream] system deny word %s matched from chunk: %s", pluginName, matchedWord, chunk)
+			wlog.LogWithLine("[%s] [stream] system deny word %s matched from chunk: %s", pluginName, matchedWord, chunk)
 			return true
 		}
 	}
@@ -115,7 +115,8 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 		return nil
 	}
 
-	var results []MatchResult
+	// 预分配结果切片，减少内存分配
+	results := make([]MatchResult, 0, 16)
 	textBytes := []byte(text)
 
 	// 检查自定义敏感词
@@ -123,19 +124,20 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 		matcher := getOrBuildCustomMatcher(config.DenyWords)
 		matches := matcher.Match(textBytes)
 		if len(matches) > 0 {
-			// 使用 map 去重，避免重复处理同一个敏感词
-			processedWords := make(map[int]bool)
+			// 使用 map 去重，避免重复处理同一个敏感词，预分配容量
+			processedWords := make(map[int]bool, len(matches))
 			for _, wordIdx := range matches {
 				if processedWords[wordIdx] {
 					continue
 				}
 				processedWords[wordIdx] = true
 				matchedWord := config.DenyWords[wordIdx]
-				// 在文本中查找所有该敏感词的位置
+				// 使用优化的搜索方法
 				wordBytes := []byte(matchedWord)
+				wordLen := len(wordBytes)
 				start := 0
 				for {
-					pos := findBytes(textBytes[start:], wordBytes)
+					pos := findBytesOptimized(textBytes[start:], wordBytes)
 					if pos == -1 {
 						break
 					}
@@ -143,7 +145,7 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 					results = append(results, MatchResult{
 						MatchedWord: matchedWord,
 						StartPos:    actualPos,
-						EndPos:      actualPos + len(wordBytes),
+						EndPos:      actualPos + wordLen,
 					})
 					start = actualPos + 1
 					if start >= len(textBytes) {
@@ -159,19 +161,20 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 		matcher := getOrBuildSystemMatcher(systemDenyWords)
 		matches := matcher.Match(textBytes)
 		if len(matches) > 0 {
-			// 使用 map 去重，避免重复处理同一个敏感词
-			processedWords := make(map[int]bool)
+			// 使用 map 去重，避免重复处理同一个敏感词，预分配容量
+			processedWords := make(map[int]bool, len(matches))
 			for _, wordIdx := range matches {
 				if processedWords[wordIdx] {
 					continue
 				}
 				processedWords[wordIdx] = true
 				matchedWord := systemDenyWords[wordIdx]
-				// 在文本中查找所有该敏感词的位置
+				// 使用优化的搜索方法
 				wordBytes := []byte(matchedWord)
+				wordLen := len(wordBytes)
 				start := 0
 				for {
-					pos := findBytes(textBytes[start:], wordBytes)
+					pos := findBytesOptimized(textBytes[start:], wordBytes)
 					if pos == -1 {
 						break
 					}
@@ -179,7 +182,7 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 					results = append(results, MatchResult{
 						MatchedWord: matchedWord,
 						StartPos:    actualPos,
-						EndPos:      actualPos + len(wordBytes),
+						EndPos:      actualPos + wordLen,
 					})
 					start = actualPos + 1
 					if start >= len(textBytes) {
@@ -193,17 +196,50 @@ func FindSensitiveWordMatches(text string, config *config.AiDataMaskingConfig, s
 	return results
 }
 
-// findBytes 在字节切片中查找子切片的位置
-func findBytes(haystack, needle []byte) int {
-	if len(needle) == 0 {
+// findBytesOptimized 优化的字节切片查找（针对短字符串优化）
+func findBytesOptimized(haystack, needle []byte) int {
+	needleLen := len(needle)
+	if needleLen == 0 {
 		return 0
 	}
-	if len(needle) > len(haystack) {
+	haystackLen := len(haystack)
+	if needleLen > haystackLen {
 		return -1
 	}
-	for i := 0; i <= len(haystack)-len(needle); i++ {
+	if needleLen == 1 {
+		// 单字节优化
+		needleByte := needle[0]
+		for i := 0; i < haystackLen; i++ {
+			if haystack[i] == needleByte {
+				return i
+			}
+		}
+		return -1
+	}
+	// 对于短字符串，使用首尾字符快速过滤
+	if needleLen <= 4 {
+		firstByte := needle[0]
+		lastByte := needle[needleLen-1]
+		for i := 0; i <= haystackLen-needleLen; i++ {
+			if haystack[i] == firstByte && haystack[i+needleLen-1] == lastByte {
+				match := true
+				for j := 1; j < needleLen-1; j++ {
+					if haystack[i+j] != needle[j] {
+						match = false
+						break
+					}
+				}
+				if match {
+					return i
+				}
+			}
+		}
+		return -1
+	}
+	// 长字符串使用标准方法
+	for i := 0; i <= haystackLen-needleLen; i++ {
 		match := true
-		for j := 0; j < len(needle); j++ {
+		for j := 0; j < needleLen; j++ {
 			if haystack[i+j] != needle[j] {
 				match = false
 				break

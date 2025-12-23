@@ -192,7 +192,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfi
 		return types.ActionContinue
 	}
 	if err != nil {
-		proxywasm.LogErrorf("failed to get content-length: %v", err)
+		// proxywasm.LogErrorf("failed to get content-length: %v", err)
 		return types.ActionContinue
 	}
 
@@ -208,6 +208,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, 
 	if cfg.DenyOpenAI {
 		var modified bool
 		var denied bool
+		// 请求体阶段处理OpenAI请求
 		modified, denied = lib.ProcessOpenAIRequest(ctx, pluginCtx, body)
 		// 如果匹配到敏感词
 		if denied {
@@ -270,7 +271,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, 
 			}
 			ctx.SetUserAttribute("deny_message", openaiResponseJson)
 			wlog.LogWithLine("[%s] onHttpRequestBody: pluginCtx.OpenAIRequest.Model=%s", pluginName, pluginCtx.OpenAIRequest.Model)
-			wlog.LogWithLine("[%s] onHttpRequestBody OpenAi:%b Stream:%b deny() called: deny_message=%s", pluginName, pluginCtx.RequestDenyModifyType, pluginCtx.OpenAIRequest.Stream, cfg.DenyMessage)
+			wlog.LogWithLine("[%s] onHttpRequestBody DenyModifyType:%s Stream:%v deny() called: deny_message=%s",
+				pluginName, pluginCtx.RequestDenyModifyType, pluginCtx.OpenAIRequest.Stream, cfg.DenyMessage)
 
 			return lib.DenyHandler(ctx, pluginCtx)
 		}
@@ -497,7 +499,18 @@ func processNonStreamResponse(ctx wrapper.HttpContext, cfg config.AiDataMaskingC
 func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, chunk []byte, isLastChunk bool) []byte {
 	pluginCtx := getOrCreatePluginContext(ctx, &cfg)
 	pluginCtx.Step = config.StepStreamRespBody
-	wlog.LogWithLine("[%s] Process Step: %s", pluginName, pluginCtx.Step.String())
+	// wlog.LogWithLine("[%s] Process Step: %s", pluginName, pluginCtx.Step.String())
+
+	// 如果已经检测到敏感词并拒绝，后续的chunk直接返回 [DONE] 或空，不再处理
+	if pluginCtx.StreamDenied {
+		// wlog.LogWithLine("[%s] onHttpStreamingResponseBody: stream already denied, returning [DONE]", pluginName)
+		// 如果是最后一个chunk，返回 [DONE]，否则返回空（丢弃后续chunk）
+		if isLastChunk {
+			// return []byte("data: [DONE]\n\n")
+			return nil
+		}
+		return nil
+	}
 
 	// 先处理 OpenAI JSON 响应（如果启用）,并且请求阶段是openai格式
 	if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
@@ -508,17 +521,19 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 			pluginCtx.IsDeny = true
 			pluginCtx.IsResponseDeny = true
 			pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
-			// 返回截断的响应（通常是 data: [DONE]）
+			// 返回截断的响应（包含拒绝消息和 [DONE]）
 			if processedChunk != nil {
 				wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response,  processedChunk=%s", pluginName, string(processedChunk))
 				return processedChunk
 			}
-			return nil
+			// // 如果没有返回chunk，返回 [DONE] 结束流
+			// return []byte("data: [DONE]\n\n")
 		}
 		// 没有 deny，返回处理后的 chunk（可能是原样或修改后的）
 		if processedChunk != nil {
+			wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response, processedChunk=%s", pluginName, string(processedChunk))
 			return processedChunk
 		}
 	}
-	return chunk
+	return []byte(": HIGRESS AI DATA PROCESSING \n\n")
 }

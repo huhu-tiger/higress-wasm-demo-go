@@ -282,10 +282,10 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 		pluginCtx.StreamChunkBufferSize = 0
 	}
 
-	// 获取缓冲区大小，默认为 10KB
+	// 获取缓冲区大小
 	bufferSize := pluginCtx.Config.StreamBuffer
 	if bufferSize == 0 {
-		bufferSize = 10 * 1024 // 默认 10KB
+		bufferSize = 1024 * 1024 // 默认 10*1024B
 	}
 
 	// 使用 wrapper.UnifySSEChunk 统一处理 SSE 格式
@@ -355,43 +355,50 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 				reasoningDelta := delta.Get("reasoning").String()
 
 				// 将增量添加到缓冲区（滑动窗口）
+				// 优化：使用 strings.Builder 减少内存分配（仅在需要时使用）
 				if contentDelta != "" {
+					oldLen := len(pluginCtx.StreamContentBuffer)
 					pluginCtx.StreamContentBuffer += contentDelta
+					newLen := len(pluginCtx.StreamContentBuffer)
 					// 限制缓冲区大小
-					if len(pluginCtx.StreamContentBuffer) > int(bufferSize) {
+					if newLen > int(bufferSize) {
 						// 保留最新的 bufferSize 字节，滑动窗口
-						pluginCtx.StreamContentBuffer = pluginCtx.StreamContentBuffer[len(pluginCtx.StreamContentBuffer)-int(bufferSize):]
-						// 调整所有 chunk 的 content 位置
+						cutoff := newLen - int(bufferSize)
+						pluginCtx.StreamContentBuffer = pluginCtx.StreamContentBuffer[cutoff:]
+						// 调整所有 chunk 的 content 位置（优化：只调整受影响的 chunk）
 						for i := range pluginCtx.StreamChunkBuffer {
-							if pluginCtx.StreamChunkBuffer[i].ContentStart >= len(pluginCtx.StreamContentBuffer)-int(bufferSize) {
-								pluginCtx.StreamChunkBuffer[i].ContentStart -= len(pluginCtx.StreamContentBuffer) - int(bufferSize)
-								pluginCtx.StreamChunkBuffer[i].ContentEnd -= len(pluginCtx.StreamContentBuffer) - int(bufferSize)
+							if pluginCtx.StreamChunkBuffer[i].ContentStart >= cutoff {
+								pluginCtx.StreamChunkBuffer[i].ContentStart -= cutoff
+								pluginCtx.StreamChunkBuffer[i].ContentEnd -= cutoff
 							} else {
 								pluginCtx.StreamChunkBuffer[i].ContentStart = 0
 								pluginCtx.StreamChunkBuffer[i].ContentEnd = 0
 							}
 						}
-						contentStart = len(pluginCtx.StreamContentBuffer) - len(contentDelta)
+						contentStart = newLen - int(bufferSize) - (oldLen - cutoff)
 					}
 				}
 
 				if reasoningDelta != "" {
+					oldLen := len(pluginCtx.StreamReasoningBuffer)
 					pluginCtx.StreamReasoningBuffer += reasoningDelta
+					newLen := len(pluginCtx.StreamReasoningBuffer)
 					// 限制缓冲区大小
-					if len(pluginCtx.StreamReasoningBuffer) > int(bufferSize) {
+					if newLen > int(bufferSize) {
 						// 保留最新的 bufferSize 字节，滑动窗口
-						pluginCtx.StreamReasoningBuffer = pluginCtx.StreamReasoningBuffer[len(pluginCtx.StreamReasoningBuffer)-int(bufferSize):]
-						// 调整所有 chunk 的 reasoning 位置
+						cutoff := newLen - int(bufferSize)
+						pluginCtx.StreamReasoningBuffer = pluginCtx.StreamReasoningBuffer[cutoff:]
+						// 调整所有 chunk 的 reasoning 位置（优化：只调整受影响的 chunk）
 						for i := range pluginCtx.StreamChunkBuffer {
-							if pluginCtx.StreamChunkBuffer[i].ReasoningStart >= len(pluginCtx.StreamReasoningBuffer)-int(bufferSize) {
-								pluginCtx.StreamChunkBuffer[i].ReasoningStart -= len(pluginCtx.StreamReasoningBuffer) - int(bufferSize)
-								pluginCtx.StreamChunkBuffer[i].ReasoningEnd -= len(pluginCtx.StreamReasoningBuffer) - int(bufferSize)
+							if pluginCtx.StreamChunkBuffer[i].ReasoningStart >= cutoff {
+								pluginCtx.StreamChunkBuffer[i].ReasoningStart -= cutoff
+								pluginCtx.StreamChunkBuffer[i].ReasoningEnd -= cutoff
 							} else {
 								pluginCtx.StreamChunkBuffer[i].ReasoningStart = 0
 								pluginCtx.StreamChunkBuffer[i].ReasoningEnd = 0
 							}
 						}
-						reasoningStart = len(pluginCtx.StreamReasoningBuffer) - len(reasoningDelta)
+						reasoningStart = newLen - int(bufferSize) - (oldLen - cutoff)
 					}
 				}
 
@@ -417,6 +424,31 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 	// 检查是否需要处理缓冲区（缓冲区满或流结束）
 	shouldProcess := streamEnded || pluginCtx.StreamChunkBufferSize >= int(bufferSize)
 
+	// 优化：即使缓冲区未满，也进行增量检测（检测新增部分）
+	// 这样可以更早发现敏感词，避免等待缓冲区满
+	if !shouldProcess && len(pluginCtx.StreamChunkBuffer) > 0 {
+		// 只检测最后一个 chunk 对应的新增内容
+		lastChunk := pluginCtx.StreamChunkBuffer[len(pluginCtx.StreamChunkBuffer)-1]
+		if !lastChunk.IsDone {
+			// 检测新增的 content 部分
+			if lastChunk.ContentEnd > lastChunk.ContentStart {
+				newContent := pluginCtx.StreamContentBuffer[lastChunk.ContentStart:lastChunk.ContentEnd]
+				if CheckMessage(newContent, pluginCtx.Config, config.SystemDenyWords, false) {
+					// 发现敏感词，立即处理
+					shouldProcess = true
+				}
+			}
+			// 检测新增的 reasoning 部分
+			if !shouldProcess && lastChunk.ReasoningEnd > lastChunk.ReasoningStart {
+				newReasoning := pluginCtx.StreamReasoningBuffer[lastChunk.ReasoningStart:lastChunk.ReasoningEnd]
+				if CheckMessage(newReasoning, pluginCtx.Config, config.SystemDenyWords, false) {
+					// 发现敏感词，立即处理
+					shouldProcess = true
+				}
+			}
+		}
+	}
+
 	if !shouldProcess {
 		// 缓冲区未满且流未结束，暂不返回，等待更多数据
 		return nil, false
@@ -424,58 +456,62 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 
 	// 处理缓冲区：进行敏感词检查
 	denied := false
-	deniedChunkIndices := make(map[int]bool) // 记录包含敏感词的 chunk 索引
+	// 优化：预分配 map 容量，减少内存分配
+	deniedChunkIndices := make(map[int]bool, len(pluginCtx.StreamChunkBuffer))
 
 	// 检查累积缓冲区中是否包含敏感词，并获取所有匹配的位置
 	// 这样可以识别跨越多个 chunk 的敏感词
 	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
 	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
 
-	// 根据匹配位置，标记所有涉及的 chunk
-	// 处理 content 缓冲区的匹配
+	// 优化：合并匹配结果，减少遍历次数
+	allMatches := make([]struct {
+		match     MatchResult
+		isContent bool
+	}, 0, len(contentMatches)+len(reasoningMatches))
 	for _, match := range contentMatches {
-		denied = true
-		// 找到所有与这个敏感词位置重叠的 chunk
-		for i, streamChunk := range pluginCtx.StreamChunkBuffer {
-			if streamChunk.IsDone {
-				continue
-			}
-
-			chunkStart := streamChunk.ContentStart
-			chunkEnd := streamChunk.ContentEnd
-
-			// 检查敏感词位置是否与 chunk 位置重叠
-			// 如果敏感词的任何部分在 chunk 范围内，就标记这个 chunk
-			if (match.StartPos >= chunkStart && match.StartPos < chunkEnd) ||
-				(match.EndPos > chunkStart && match.EndPos <= chunkEnd) ||
-				(match.StartPos <= chunkStart && match.EndPos >= chunkEnd) {
-				deniedChunkIndices[i] = true
-				wlog.LogWithLine("[%s] ProcessOpenAIStreamResponse: sensitive word '%s' detected in content, marking chunk %d (pos: %d-%d, chunk: %d-%d)",
-					pluginName, match.MatchedWord, i, match.StartPos, match.EndPos, chunkStart, chunkEnd)
-			}
-		}
+		allMatches = append(allMatches, struct {
+			match     MatchResult
+			isContent bool
+		}{match, true})
+	}
+	for _, match := range reasoningMatches {
+		allMatches = append(allMatches, struct {
+			match     MatchResult
+			isContent bool
+		}{match, false})
 	}
 
-	// 处理 reasoning 缓冲区的匹配
-	for _, match := range reasoningMatches {
+	// 优化：一次遍历标记所有涉及的 chunk
+	if len(allMatches) > 0 {
 		denied = true
-		// 找到所有与这个敏感词位置重叠的 chunk
-		for i, streamChunk := range pluginCtx.StreamChunkBuffer {
-			if streamChunk.IsDone {
-				continue
-			}
+		for _, item := range allMatches {
+			match := item.match
+			isContent := item.isContent
+			// 找到所有与这个敏感词位置重叠的 chunk
+			for i, streamChunk := range pluginCtx.StreamChunkBuffer {
+				if streamChunk.IsDone {
+					continue
+				}
 
-			chunkStart := streamChunk.ReasoningStart
-			chunkEnd := streamChunk.ReasoningEnd
+				var chunkStart, chunkEnd int
+				if isContent {
+					chunkStart = streamChunk.ContentStart
+					chunkEnd = streamChunk.ContentEnd
+				} else {
+					chunkStart = streamChunk.ReasoningStart
+					chunkEnd = streamChunk.ReasoningEnd
+				}
 
-			// 检查敏感词位置是否与 chunk 位置重叠
-			// 如果敏感词的任何部分在 chunk 范围内，就标记这个 chunk
-			if (match.StartPos >= chunkStart && match.StartPos < chunkEnd) ||
-				(match.EndPos > chunkStart && match.EndPos <= chunkEnd) ||
-				(match.StartPos <= chunkStart && match.EndPos >= chunkEnd) {
-				deniedChunkIndices[i] = true
-				wlog.LogWithLine("[%s] ProcessOpenAIStreamResponse: sensitive word '%s' detected in reasoning, marking chunk %d (pos: %d-%d, chunk: %d-%d)",
-					pluginName, match.MatchedWord, i, match.StartPos, match.EndPos, chunkStart, chunkEnd)
+				// 检查敏感词位置是否与 chunk 位置重叠
+				// 如果敏感词的任何部分在 chunk 范围内，就标记这个 chunk
+				if (match.StartPos >= chunkStart && match.StartPos < chunkEnd) ||
+					(match.EndPos > chunkStart && match.EndPos <= chunkEnd) ||
+					(match.StartPos <= chunkStart && match.EndPos >= chunkEnd) {
+					deniedChunkIndices[i] = true
+					wlog.LogWithLine("[%s] ProcessOpenAIStreamResponse: sensitive word '%s' detected in %s, marking chunk %d (pos: %d-%d, chunk: %d-%d)",
+						pluginName, match.MatchedWord, map[bool]string{true: "content", false: "reasoning"}[isContent], i, match.StartPos, match.EndPos, chunkStart, chunkEnd)
+				}
 			}
 		}
 	}
@@ -483,43 +519,24 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 	// 构建返回结果
 	var result strings.Builder
 	if denied {
-		// 有敏感词：删除包含敏感词的 chunk，用自定义内容替换
+		// 有敏感词：用拒绝消息替换，不返回任何之前的chunk（包括不包含敏感词的chunk）
 		pluginCtx.StreamDenied = true
 
-		// 替换所有被标记的 chunk
-		replaced := false
-		for i, streamChunk := range pluginCtx.StreamChunkBuffer {
-			// 跳过 [DONE] chunk，最后统一处理
-			if streamChunk.IsDone {
-				continue
-			}
-
-			if deniedChunkIndices[i] {
-				// 只替换第一个被标记的 chunk，后续的被标记 chunk 直接跳过（不输出）
-				if !replaced {
-					// 用自定义内容替换第一个被标记的 chunk
-					denyMessage := pluginCtx.Config.DenyMessage
-					if denyMessage == "" {
-						denyMessage = "提问或回答中包含敏感词，已被屏蔽"
-					}
-
-					// 构造替换的 SSE 事件
-					replacementChunk := fmt.Sprintf("data: {\"id\":\"chatcmpl-deny\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"%s\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"%s\"},\"finish_reason\":null}]}\n\n",
-						pluginCtx.OpenAIRequest.Model, denyMessage)
-					result.WriteString(replacementChunk)
-					replaced = true
-				}
-				// 其他被标记的 chunk 不输出，直接跳过
-			} else {
-				// 不包含敏感词的 chunk 原样返回
-				result.Write(streamChunk.Data)
-			}
+		// 构造拒绝消息的 SSE 事件，替换包含敏感词的chunk
+		denyMessage := pluginCtx.Config.DenyMessage
+		if denyMessage == "" {
+			denyMessage = "提问或回答中包含敏感词，已被屏蔽"
 		}
 
-		// 如果流已结束，添加 [DONE]
-		if streamEnded {
-			result.WriteString("data: [DONE]\n\n")
-		}
+		// 构造替换的 SSE 事件（替换第一个包含敏感词的chunk的位置）
+		replacementChunk := fmt.Sprintf("data: {\"id\":\"chatcmpl-deny\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"%s\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"%s\"},\"finish_reason\":null}]}\n\n",
+			pluginCtx.OpenAIRequest.Model, denyMessage)
+		result.WriteString(replacementChunk)
+
+		// 检测到敏感词后，立即添加 [DONE] 标记，结束流
+		result.WriteString("data: [DONE]\n\n")
+		wlog.LogWithLine("[%s] ProcessOpenAIStreamResponse: sensitive word detected, result=%s",
+			pluginName, result.String())
 	} else {
 		// 没有敏感词：原样返回所有 chunk
 		for _, streamChunk := range pluginCtx.StreamChunkBuffer {
@@ -528,6 +545,10 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 	}
 
 	// 清空缓冲区，准备处理下一批数据
+	// 优化：如果缓冲区很大，重新分配以释放内存
+	if cap(pluginCtx.StreamChunkBuffer) > 1024 {
+		pluginCtx.StreamChunkBuffer = nil
+	}
 	pluginCtx.StreamChunkBuffer = pluginCtx.StreamChunkBuffer[:0]
 	pluginCtx.StreamChunkBufferSize = 0
 
@@ -535,7 +556,7 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 	if len(resultBytes) == 0 {
 		return nil, denied
 	}
-
+	wlog.LogWithLine("[%s] ProcessOpenAIStreamResponse: result=%s", pluginName, string(resultBytes))
 	return resultBytes, denied
 }
 

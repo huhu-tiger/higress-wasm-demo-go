@@ -19,17 +19,23 @@ const (
 
 // AiDataMaskingConfig 插件配置
 type AiDataMaskingConfig struct {
-	DenyOpenAI      bool     `json:"deny_openai"`
-	DenyRaw         bool     `json:"deny_raw"`
-	DenyJSONPath    []string `json:"deny_jsonpath"`
-	SystemDeny      bool     `json:"system_deny"`
-	DenyCode        uint32   `json:"deny_code"`
-	DenyMessage     string   `json:"deny_message"`
-	DenyRawMessage  string   `json:"deny_raw_message"`
-	DenyContentType string   `json:"deny_content_type"`
-	DenyWords       []string `json:"deny_words"`
-	ReplaceRoles    []Rule   `json:"replace_roles"`
-	StreamBuffer    uint32   `json:"stream_buffer"`
+	DenyOpenAI       bool             `json:"deny_openai"`
+	DenyRaw          bool             `json:"deny_raw"`
+	DenyJSONPath     []string         `json:"deny_jsonpath"`
+	SystemDeny       bool             `json:"system_deny"`
+	DenyCode         uint32           `json:"deny_code"`
+	DenyMessage      string           `json:"deny_message"`
+	DenyRawMessage   string           `json:"deny_raw_message"`
+	DenyContentType  string           `json:"deny_content_type"`
+	DenyWords        []string         `json:"deny_words"`         // 敏感词列表
+	ResponseDenyPlot ResponseDenyPlot `json:"response_deny_plot"` // 响应拒绝处理方式
+	ReplaceRoles     []Rule           `json:"replace_roles"`
+	StreamBuffer     uint32           `json:"stream_buffer"`
+}
+
+type ResponseDenyPlot struct {
+	Plot  string `json:"plot"`  // replace, stop,默认stop
+	Value string `json:"value"` // 如果是 replace，则替换为value，如果是stop，则返回deny_message
 }
 
 // Rule 替换规则
@@ -55,9 +61,9 @@ type PluginContext struct {
 	IsResponseDeny bool // 是否是响应阶段拒绝
 	IsDeny         bool // 是否被拒绝
 	// modify
-	IsRequestModified  bool // 是否是请求阶段修改
+	IsRequestModified  bool // 是否是请求阶段修改，暂时保留，请求阶段不做替换处理
 	IsResponseModified bool // 是否是响应阶段修改
-	IsModified         bool // 是否被修改
+	IsModified         bool // 是否拒绝敏感词后被修改
 	Step               Step // 处理步骤
 	// 流式响应缓冲区（滑动窗口）
 	StreamContentBuffer   string // content 缓冲区（用于敏感词检查）

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ai-data-masking/config"
+
 	"ai-data-masking/wlog"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -193,7 +194,7 @@ func ProcessOpenAIResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginCont
 
 	// 遍历 choices 数组
 	choices.ForEach(func(key, choice gjson.Result) bool {
-		idx := key.Int()
+		// idx := key.Int()
 
 		content := choice.Get("message.content").String()
 		reasoning := choice.Get("message.reasoning").String()
@@ -206,28 +207,28 @@ func ProcessOpenAIResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginCont
 			return false // 停止遍历
 		}
 
-		// 替换敏感词（与请求阶段保持一致，使用 ReplaceMessage）
-		newContent := ReplaceMessage(content, pluginCtx)
-		newReasoningContent := ReplaceMessage(reasoning, pluginCtx)
+		// // 替换敏感词（与请求阶段保持一致，使用 ReplaceMessage）
+		// newContent := ReplaceMessage(content, pluginCtx)
+		// newReasoningContent := ReplaceMessage(reasoning, pluginCtx)
 
 		// 构建基础路径
-		basePath := fmt.Sprintf("choices.%d.message.", idx)
+		// basePath := fmt.Sprintf("choices.%d.message.", idx)
 
-		// 如果有变更，用 sjson 回写
-		if newContent != content {
-			var err error
-			bodyStr, err = sjson.Set(bodyStr, basePath+"content", newContent)
-			if err == nil {
-				modified = true
-			}
-		}
-		if newReasoningContent != reasoning {
-			var err error
-			bodyStr, err = sjson.Set(bodyStr, basePath+"reasoning", newReasoningContent)
-			if err == nil {
-				modified = true
-			}
-		}
+		// // 如果有变更，用 sjson 回写
+		// if newContent != content {
+		// 	var err error
+		// 	bodyStr, err = sjson.Set(bodyStr, basePath+"content", newContent)
+		// 	if err == nil {
+		// 		modified = true
+		// 	}
+		// }
+		// if newReasoningContent != reasoning {
+		// 	var err error
+		// 	bodyStr, err = sjson.Set(bodyStr, basePath+"reasoning", newReasoningContent)
+		// 	if err == nil {
+		// 		modified = true
+		// 	}
+		// }
 
 		return true // 继续处理下一个 choice
 	})
@@ -270,7 +271,7 @@ func ProcessRawResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext
 
 // ProcessOpenAIStreamResponse 处理 OpenAI 流式 JSON 响应，使用滑动窗口缓冲区机制
 // 返回处理后的 chunk 和是否拒绝的标识
-func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) ([]byte, bool) {
+func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) ([]byte, bool) {
 	// 如果已经拒绝，直接返回空，不再处理后续 chunk
 	if pluginCtx.StreamDenied {
 		return nil, true
@@ -560,6 +561,321 @@ func ProcessOpenAIStreamResponse(ctx wrapper.HttpContext, pluginCtx *config.Plug
 	return resultBytes, denied
 }
 
+// ProcessOpenAIStreamReplaceResponse 处理 OpenAI 流式 JSON 响应，使用固定数量缓冲区机制
+// 缓冲10个最近的chunk，检测到敏感词则替换后一次性返回，没有检测到敏感词则正常返回
+// 缓冲区满或没有敏感词则返回，并清空缓冲区
+func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) []byte {
+	const bufferChunkCount = 10 // 缓冲10个chunk
+
+	// 初始化缓冲区
+	if pluginCtx.StreamChunkBuffer == nil {
+		pluginCtx.StreamChunkBuffer = make([]config.StreamChunk, 0)
+		pluginCtx.StreamChunkBufferSize = 0
+		pluginCtx.StreamContentBuffer = ""
+		pluginCtx.StreamReasoningBuffer = ""
+	}
+
+	// 获取替换值
+	replaceValue := pluginCtx.Config.ResponseDenyPlot.Value
+	if replaceValue == "" {
+		replaceValue = "*" // 默认替换值
+	}
+
+	// 使用 wrapper.UnifySSEChunk 统一处理 SSE 格式
+	unifiedChunk := wrapper.UnifySSEChunk(chunk)
+
+	// 按 \n\n 分割 SSE 事件（每个事件可能包含多行）
+	events := strings.Split(strings.TrimSpace(string(unifiedChunk)), "\n\n")
+
+	streamEnded := false
+
+	// 处理当前 chunk 中的所有事件
+	for _, eventStr := range events {
+		if eventStr == "" {
+			continue
+		}
+
+		// 检查是否是 [DONE] 标记
+		if strings.Contains(eventStr, "data: [DONE]") {
+			streamEnded = true
+			// 添加 [DONE] chunk
+			pluginCtx.StreamChunkBuffer = append(pluginCtx.StreamChunkBuffer, config.StreamChunk{
+				Data:   []byte(eventStr + "\n\n"),
+				IsDone: true,
+			})
+			pluginCtx.StreamChunkBufferSize += len(eventStr) + 2
+			break
+		}
+
+		// 解析事件，提取 content 和 reasoning 增量
+		lines := strings.Split(eventStr, "\n")
+		contentStart := len(pluginCtx.StreamContentBuffer)
+		reasoningStart := len(pluginCtx.StreamReasoningBuffer)
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			// 处理 SSE 格式：data: {...} 或 data:{...}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			jsonStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+			// 解析 JSON
+			root := gjson.Parse(jsonStr)
+			if !root.Exists() {
+				continue
+			}
+
+			// 检查是否是 OpenAI 流式响应格式
+			choices := root.Get("choices")
+			if !choices.Exists() || !choices.IsArray() {
+				continue
+			}
+
+			// 处理每个 choice
+			choices.ForEach(func(key, choice gjson.Result) bool {
+				// 提取 delta 中的 content 和 reasoning 增量
+				delta := choice.Get("delta")
+				if !delta.Exists() {
+					return true
+				}
+
+				contentDelta := delta.Get("content").String()
+				reasoningDelta := delta.Get("reasoning").String()
+
+				// 将增量添加到缓冲区
+				if contentDelta != "" {
+					pluginCtx.StreamContentBuffer += contentDelta
+				}
+
+				if reasoningDelta != "" {
+					pluginCtx.StreamReasoningBuffer += reasoningDelta
+				}
+
+				return true
+			})
+		}
+
+		// 记录 chunk 信息
+		contentEnd := len(pluginCtx.StreamContentBuffer)
+		reasoningEnd := len(pluginCtx.StreamReasoningBuffer)
+
+		pluginCtx.StreamChunkBuffer = append(pluginCtx.StreamChunkBuffer, config.StreamChunk{
+			Data:           []byte(eventStr + "\n\n"),
+			ContentStart:   contentStart,
+			ContentEnd:     contentEnd,
+			ReasoningStart: reasoningStart,
+			ReasoningEnd:   reasoningEnd,
+			IsDone:         false,
+		})
+		pluginCtx.StreamChunkBufferSize += len(eventStr) + 2
+	}
+
+	// 检查是否需要处理缓冲区
+	// 1. 流结束
+	// 2. 缓冲区满（10个chunk）
+	// 3. 检测到敏感词
+	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= bufferChunkCount
+
+	// 检测累积缓冲区中是否包含敏感词
+	hasSensitiveWord := false
+	if !shouldProcess && len(pluginCtx.StreamChunkBuffer) > 0 {
+		// 检测 content 缓冲区
+		if len(pluginCtx.StreamContentBuffer) > 0 {
+			if CheckMessage(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords, true) {
+				hasSensitiveWord = true
+				shouldProcess = true
+			}
+		}
+		// 检测 reasoning 缓冲区
+		if !hasSensitiveWord && len(pluginCtx.StreamReasoningBuffer) > 0 {
+			if CheckMessage(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords, true) {
+				hasSensitiveWord = true
+				shouldProcess = true
+			}
+		}
+	}
+
+	// 如果不需要处理，暂不返回，等待更多数据
+	if !shouldProcess {
+		return nil
+	}
+
+	// 处理缓冲区：检测敏感词并替换
+	// 查找所有敏感词匹配的位置
+	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
+	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
+
+	// 更新敏感词检测结果
+	hasSensitiveWord = len(contentMatches) > 0 || len(reasoningMatches) > 0
+
+	wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse: chunkCount=%d, hasSensitiveWord=%v, contentMatches=%d, reasoningMatches=%d",
+		pluginName, len(pluginCtx.StreamChunkBuffer), hasSensitiveWord, len(contentMatches), len(reasoningMatches))
+
+	if len(contentMatches) > 0 {
+		for _, match := range contentMatches {
+			wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse contentMatches: found sensitive word '%s' at [%d:%d]",
+				pluginName, match.MatchedWord, match.StartPos, match.EndPos)
+		}
+	}
+	if len(reasoningMatches) > 0 {
+		for _, match := range reasoningMatches {
+			wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse reasoningMatches: found sensitive word '%s' at [%d:%d]",
+				pluginName, match.MatchedWord, match.StartPos, match.EndPos)
+		}
+	}
+
+	// 构建返回结果
+	var result strings.Builder
+
+	if hasSensitiveWord {
+		// 有敏感词：替换后返回
+		// 替换完整文本中的敏感词
+		replacedContent := ReplaceSensitiveWordsWithValue(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+		replacedReasoning := ReplaceSensitiveWordsWithValue(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+
+		// 由于 ReplaceSensitiveWordsWithValue 保持字符数（rune）相等，但字节数可能不同
+		// 我们需要按字符位置（rune）来映射，而不是按字节位置
+		// 将替换后的文本转换为 rune 数组，以便按字符位置映射
+		replacedContentRunes := []rune(replacedContent)
+		replacedReasoningRunes := []rune(replacedReasoning)
+
+		for _, streamChunk := range pluginCtx.StreamChunkBuffer {
+			if streamChunk.IsDone {
+				// [DONE] 标记直接返回
+				result.Write(streamChunk.Data)
+				continue
+			}
+
+			// 提取当前 chunk 的原始 JSON
+			chunkDataStr := strings.TrimSpace(string(streamChunk.Data))
+			lines := strings.Split(chunkDataStr, "\n")
+			var jsonStr string
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "data:") {
+					jsonStr = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+					break
+				}
+			}
+
+			if jsonStr == "" {
+				// 无法解析，直接返回原始数据
+				result.Write(streamChunk.Data)
+				continue
+			}
+
+			// 解析 JSON
+			root := gjson.Parse(jsonStr)
+			if !root.Exists() {
+				result.Write(streamChunk.Data)
+				continue
+			}
+
+			// 计算当前 chunk 对应的替换后的增量内容
+			contentStart := streamChunk.ContentStart
+			contentEnd := streamChunk.ContentEnd
+			reasoningStart := streamChunk.ReasoningStart
+			reasoningEnd := streamChunk.ReasoningEnd
+
+			// 获取替换后的增量内容（按字符位置）
+			var newContentDelta string
+			var newReasoningDelta string
+
+			if contentEnd > contentStart {
+				// 转换为字符位置
+				// 计算原始文本中 contentStart 之前的字符数
+				contentStartRunePos := len([]rune(pluginCtx.StreamContentBuffer[:contentStart]))
+				contentEndRunePos := len([]rune(pluginCtx.StreamContentBuffer[:contentEnd]))
+				// 从替换后的文本中提取对应的字符
+				if contentEndRunePos <= len(replacedContentRunes) {
+					newContentDelta = string(replacedContentRunes[contentStartRunePos:contentEndRunePos])
+				}
+			}
+
+			if reasoningEnd > reasoningStart {
+				// 转换为字符位置
+				// 计算原始文本中 reasoningStart 之前的字符数
+				reasoningStartRunePos := len([]rune(pluginCtx.StreamReasoningBuffer[:reasoningStart]))
+				reasoningEndRunePos := len([]rune(pluginCtx.StreamReasoningBuffer[:reasoningEnd]))
+				// 从替换后的文本中提取对应的字符
+				if reasoningEndRunePos <= len(replacedReasoningRunes) {
+					newReasoningDelta = string(replacedReasoningRunes[reasoningStartRunePos:reasoningEndRunePos])
+				}
+			}
+
+			// 更新 JSON 中的 delta.content 和 delta.reasoning
+			newJsonStr := jsonStr
+			if newContentDelta != "" {
+				// 更新 delta.content
+				deltaPath := "choices.0.delta.content"
+				oldContent := root.Get(deltaPath).String()
+				if oldContent != "" {
+					var err error
+					newJsonStr, err = sjson.Set(newJsonStr, deltaPath, newContentDelta)
+					if err != nil {
+						wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse: failed to set content: %v", pluginName, err)
+						result.Write(streamChunk.Data)
+						continue
+					}
+				}
+			}
+
+			if newReasoningDelta != "" {
+				// 更新 delta.reasoning
+				deltaPath := "choices.0.delta.reasoning"
+				oldReasoning := root.Get(deltaPath).String()
+				if oldReasoning != "" {
+					var err error
+					newJsonStr, err = sjson.Set(newJsonStr, deltaPath, newReasoningDelta)
+					if err != nil {
+						wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse: failed to set reasoning: %v", pluginName, err)
+					}
+				}
+			}
+
+			// 重新构建 SSE 事件
+			result.WriteString("data: " + newJsonStr + "\n\n")
+		}
+	} else {
+		// 没有敏感词：直接返回所有 chunk 的原始数据
+		for _, streamChunk := range pluginCtx.StreamChunkBuffer {
+			result.Write(streamChunk.Data)
+		}
+	}
+
+	// 清空缓冲区，准备处理下一批数据（滑动窗口）
+	// 如果缓冲区很大，重新分配以释放内存
+	if cap(pluginCtx.StreamChunkBuffer) > 1024 {
+		wlog.LogWithLine("!!!![%s] ProcessOpenAIStreamReplaceResponse: streamChunkBuffer capacity is too large, reallocating", pluginName)
+		pluginCtx.StreamChunkBuffer = nil
+	}
+	wlog.LogWithLine("!!!![%s] ProcessOpenAIStreamReplaceResponse: streamChunkBuffer capacity is %d", pluginName, cap(pluginCtx.StreamChunkBuffer))
+
+	pluginCtx.StreamChunkBuffer = pluginCtx.StreamChunkBuffer[:0]
+	pluginCtx.StreamChunkBufferSize = 0
+
+	// 清空内容缓冲区（滑动窗口：只保留最新的数据）
+	// 注意：这里需要保留一些历史数据，以便处理跨越窗口边界的敏感词
+	// 但为了简化，我们清空缓冲区，因为已经处理了当前窗口的数据
+	pluginCtx.StreamContentBuffer = ""
+	pluginCtx.StreamReasoningBuffer = ""
+
+	resultBytes := []byte(result.String())
+	if len(resultBytes) == 0 {
+		return nil
+	}
+
+	wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse: returning %d bytes, hasSensitiveWord=%v",
+		pluginName, len(resultBytes), hasSensitiveWord)
+
+	return resultBytes
+}
+
 // deny 拒绝请求/响应
 func DenyHandler(ctx wrapper.HttpContext, pluginCtx *config.PluginContext) types.Action {
 	cfg := pluginCtx.Config
@@ -603,6 +919,12 @@ func DenyHandler(ctx wrapper.HttpContext, pluginCtx *config.PluginContext) types
 				headers = append(headers, [2]string{"deny_step", denyStepStr})
 			}
 		}
+
+		if denyPlotAttr := ctx.GetUserAttribute("deny_plot"); denyPlotAttr != nil {
+			if denyPlotStr, ok := denyPlotAttr.(string); ok && denyPlotStr != "" {
+				headers = append(headers, [2]string{"deny_plot", denyPlotStr})
+			}
+		}
 		denyMessage := ctx.GetUserAttribute("deny_message").([]byte)
 
 		wlog.LogWithLine("[%s] deny() -> Calling SendHttpResponse: code=%d, headers=%d, contentType=%s, body length=%d",
@@ -623,6 +945,7 @@ func DenyHandler(ctx wrapper.HttpContext, pluginCtx *config.PluginContext) types
 		proxywasm.RemoveHttpResponseHeader("content-type")
 		proxywasm.AddHttpResponseHeader("content-type", cfg.DenyContentType)
 		// 如果存在用户属性，添加到响应头
+		wlog.LogWithLine("[%s] deny() -> x-ai-data-masking=%s", pluginName, ctx.GetUserAttribute("x-ai-data-masking"))
 		if maskingAttr := ctx.GetUserAttribute("x-ai-data-masking"); maskingAttr != nil {
 			if maskingStr, ok := maskingAttr.(string); ok && maskingStr != "" {
 				proxywasm.RemoveHttpResponseHeader("x-ai-data-masking")
@@ -635,6 +958,12 @@ func DenyHandler(ctx wrapper.HttpContext, pluginCtx *config.PluginContext) types
 				proxywasm.AddHttpResponseHeader("deny_step", denyStepStr)
 			}
 		}
+		if denyPlotAttr := ctx.GetUserAttribute("deny_plot"); denyPlotAttr != nil {
+			if denyPlotStr, ok := denyPlotAttr.(string); ok && denyPlotStr != "" {
+				proxywasm.RemoveHttpResponseHeader("deny_plot")
+				proxywasm.AddHttpResponseHeader("deny_plot", denyPlotStr)
+			}
+		}
 		denyMessage := ctx.GetUserAttribute("deny_message").([]byte)
 		wlog.LogWithLine("[%s] deny() -> ReplaceHttpResponseBody called with denyMessage length=%d", pluginName, len(denyMessage))
 		proxywasm.ReplaceHttpResponseBody(denyMessage)
@@ -645,5 +974,88 @@ func DenyHandler(ctx wrapper.HttpContext, pluginCtx *config.PluginContext) types
 		return types.ActionContinue
 	}
 
+	return types.ActionContinue
+}
+
+// deny 拒绝请求/响应
+func DenyHandlerResponseReplaceNonStream(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, bodyStr string) types.Action {
+
+	// 确保 OpenAIRequest 已初始化
+	if pluginCtx.OpenAIRequest == nil {
+		pluginCtx.OpenAIRequest = &config.OpenAIRequest{}
+	}
+	// 设置标志，表示响应已被拒绝，跳过后续处理
+	ctx.SetUserAttribute("response_denied", "true")
+	// replace 策略：替换敏感词为 value，保持字符数相等
+	replaceValue := pluginCtx.Config.ResponseDenyPlot.Value
+	wlog.LogWithLine("[%s] processNonStreamResponse: using replace strategy, value=%s", pluginName, replaceValue)
+	// 如果存在用户属性，添加到响应头
+	if maskingAttr := ctx.GetUserAttribute("x-ai-data-masking"); maskingAttr != nil {
+		if maskingStr, ok := maskingAttr.(string); ok && maskingStr != "" {
+			wlog.LogWithLine("[%s] DenyHandlerResponseReplaceNonStream: x-ai-data-masking=%s", pluginName, maskingStr)
+			proxywasm.RemoveHttpResponseHeader("x-ai-data-masking")
+			proxywasm.AddHttpResponseHeader("x-ai-data-masking", maskingStr)
+		}
+	}
+	if denyStepAttr := ctx.GetUserAttribute("deny_step"); denyStepAttr != nil {
+		if denyStepStr, ok := denyStepAttr.(string); ok && denyStepStr != "" {
+			proxywasm.RemoveHttpResponseHeader("deny_step")
+			proxywasm.AddHttpResponseHeader("deny_step", denyStepStr)
+		}
+	}
+	if denyPlotAttr := ctx.GetUserAttribute("deny_plot"); denyPlotAttr != nil {
+		if denyPlotStr, ok := denyPlotAttr.(string); ok && denyPlotStr != "" {
+			proxywasm.RemoveHttpResponseHeader("deny_plot")
+			proxywasm.AddHttpResponseHeader("deny_plot", denyPlotStr)
+		}
+	}
+	// 解析响应体，替换敏感词
+	root := gjson.Parse(bodyStr)
+	if root.Exists() {
+		choices := gjson.Get(bodyStr, "choices")
+		newBodyStr := bodyStr
+
+		// 遍历 choices 数组，替换敏感词
+		choices.ForEach(func(key, choice gjson.Result) bool {
+			idx := key.Int()
+			content := choice.Get("message.content").String()
+			reasoning := choice.Get("message.reasoning").String()
+
+			// 替换 content 中的敏感词
+			if content != "" {
+				newContent := ReplaceSensitiveWordsWithValue(content, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+				if newContent != content {
+					basePath := fmt.Sprintf("choices.%d.message.content", idx)
+					var err error
+					newBodyStr, err = sjson.Set(newBodyStr, basePath, newContent)
+					if err != nil {
+						wlog.LogWithLine("[%s] processNonStreamResponse: failed to set content: %v", pluginName, err)
+					}
+				}
+			}
+
+			// 替换 reasoning 中的敏感词
+			if reasoning != "" {
+				newReasoning := ReplaceSensitiveWordsWithValue(reasoning, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+				if newReasoning != reasoning {
+					basePath := fmt.Sprintf("choices.%d.message.reasoning", idx)
+					var err error
+					newBodyStr, err = sjson.Set(newBodyStr, basePath, newReasoning)
+					if err != nil {
+						wlog.LogWithLine("[%s] processNonStreamResponse: failed to set reasoning: %v", pluginName, err)
+					}
+				}
+			}
+
+			return true
+		})
+
+		// 替换响应体并更新 Content-Length
+		newBodyBytes := []byte(newBodyStr)
+		proxywasm.ReplaceHttpResponseBody(newBodyBytes)
+		// 更新 Content-Length 头，防止请求卡住
+		proxywasm.RemoveHttpResponseHeader("content-length")
+		proxywasm.AddHttpResponseHeader("content-length", fmt.Sprintf("%d", len(newBodyBytes)))
+	}
 	return types.ActionContinue
 }

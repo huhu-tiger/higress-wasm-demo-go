@@ -63,32 +63,10 @@ static_resources:
                           "宝塔镇河妖",
                           "宋江"
                         ],
-                        "replace_roles": [
-                          {
-                            "regex": "%{MOBILE}",
-                            "type": "replace",
-                            "restore": false,
-                            "value": "[xxxx]"
-                          },
-                          {
-                            "regex": "%{IP}",
-                            "type": "replace",
-                            "restore": true,
-                            "value": "a.b.c.d"
-                          },
-                          {
-                            "regex": "%{IDCARD}",
-                            "type": "replace",
-                            "restore": false,
-                            "value": "****"
-                          },
-                          {
-                            "regex": "sk-[0-9a-zA-Z]*",
-                            "type": "hash",
-                            "restore": true,
-                            "value": ""
-                          }
-                        ]
+                        "deny_plot": {
+                          "plot":"replace",
+                          "value":"~~"
+                        }
                       }
           - name: envoy.filters.http.router
             typed_config:

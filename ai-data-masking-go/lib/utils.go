@@ -4,6 +4,7 @@ import (
 	"ai-data-masking/config"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
@@ -167,4 +168,41 @@ func ReplaceSensitiveWordsWithValue(text string, config *config.AiDataMaskingCon
 	}
 
 	return result
+}
+
+// calculateMaxSensitiveWordLength 计算最长敏感词的长度（字节数）
+// 用于确定需要保留多少历史数据以检测跨窗口边界的敏感词
+func CalculateMaxSensitiveWordLength(cfg *config.AiDataMaskingConfig) int {
+	maxLen := 0
+	maxWordLen := 0
+	// 检查自定义敏感词
+	if len(cfg.DenyWords) > 0 {
+		for _, word := range cfg.DenyWords {
+			if utf8.RuneCountInString(word) > maxWordLen {
+				maxWordLen = utf8.RuneCountInString(word)
+			}
+		}
+	}
+
+	// 检查系统敏感词
+	if cfg.SystemDeny && len(config.SystemDenyWords) > 0 {
+		for _, word := range config.SystemDenyWords {
+			if utf8.RuneCountInString(word) > maxWordLen {
+				maxWordLen = utf8.RuneCountInString(word)
+			}
+		}
+	}
+
+	// 如果没有任何敏感词，返回一个默认值（比如 20 字节）
+	// 这样可以保留一些历史数据，以防万一
+	if maxLen == 0 {
+		maxLen = maxWordLen * 3 * 2 // byte 中文占3个字节，英文占1个字节，2倍冗余
+	}
+
+	return maxLen
+}
+
+func PrintConfig(cfg *config.AiDataMaskingConfig) []byte {
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return b
 }

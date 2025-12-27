@@ -60,7 +60,7 @@ static_resources:
                         "deny_content_type": "application/json",
                         "deny_words": [
                           "测试敏感词",
-                          "宝塔镇河妖",
+                          "宝塔",
                           "宋江"
                         ],
                         "deny_plot": {

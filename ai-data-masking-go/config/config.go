@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	DEFAULT_MAX_BODY_BYTES uint32 = 100 * 1024 * 1024
-	MaxBufferChunkCount    uint32 = 30
+	DEFAULT_MAX_BODY_BYTES         uint32 = 100 * 1024 * 1024
+	DefaultMaxBufferChunkCount     uint32 = 30
+	DefaultMaxStreamChunkBufferLen uint32 = 2048
 )
 
 const (
@@ -18,20 +19,24 @@ const (
 	FINISH_REASON_STOP = "stop"
 )
 
+var MaxSensitiveWordLength int = 0 // 最长敏感词长度（字节数），在配置解析时计算
+
 // AiDataMaskingConfig 插件配置
 type AiDataMaskingConfig struct {
-	DenyOpenAI       bool             `json:"deny_openai"`
-	DenyRaw          bool             `json:"deny_raw"`
-	DenyJSONPath     []string         `json:"deny_jsonpath"`
-	SystemDeny       bool             `json:"system_deny"`
-	DenyCode         uint32           `json:"deny_code"`
-	DenyMessage      string           `json:"deny_message"`
-	DenyRawMessage   string           `json:"deny_raw_message"`
-	DenyContentType  string           `json:"deny_content_type"`
-	DenyWords        []string         `json:"deny_words"`         // 敏感词列表
-	ResponseDenyPlot ResponseDenyPlot `json:"response_deny_plot"` // 响应拒绝处理方式
-	ReplaceRoles     []Rule           `json:"replace_roles"`
-	StreamBuffer     uint32           `json:"stream_buffer"`
+	DenyOpenAI              bool             `json:"deny_openai"`
+	DenyRaw                 bool             `json:"deny_raw"`
+	DenyJSONPath            []string         `json:"deny_jsonpath"`
+	SystemDeny              bool             `json:"system_deny"`
+	DenyCode                uint32           `json:"deny_code"`
+	DenyMessage             string           `json:"deny_message"`
+	DenyRawMessage          string           `json:"deny_raw_message"`
+	DenyContentType         string           `json:"deny_content_type"`
+	DenyWords               []string         `json:"deny_words"`         // 敏感词列表
+	ResponseDenyPlot        ResponseDenyPlot `json:"response_deny_plot"` // 响应拒绝处理方式
+	ReplaceRoles            []Rule           `json:"replace_roles"`
+	StreamBuffer            uint32           `json:"stream_buffer"`
+	MaxBufferChunkCount     uint32           `json:"max_buffer_chunk_count"`      // 最长敏感词检测chunk个数
+	MaxStreamChunkBufferLen uint32           `json:"max_stream_chunk_buffer_len"` // 最长敏感词检测chunk大小
 }
 
 type ResponseDenyPlot struct {
@@ -66,10 +71,15 @@ type PluginContext struct {
 	IsResponseModified bool // 是否是响应阶段修改
 	IsModified         bool // 是否拒绝敏感词后被修改
 	Step               Step // 处理步骤
+
+	MaxBufferChunkCount     uint32 // 最长敏感词检测chunk个数
+	MaxStreamChunkBufferLen uint32 // 最长敏感词检测chunk大小
 	// 流式响应缓冲区（滑动窗口）
-	StreamContentBuffer   string // content 缓冲区（用于敏感词检查）
-	StreamReasoningBuffer string // reasoning 缓冲区（用于敏感词检查）
-	StreamDenied          bool   // 是否已拒绝（用于标记后续不再处理）
+	StreamContentBuffer         string // content 缓冲区（用于敏感词检查）
+	StreamReasoningBuffer       string // reasoning 缓冲区（用于敏感词检查）
+	StreamContentBufferOffset   int    // content 缓冲区的偏移量（用于处理跨窗口边界）
+	StreamReasoningBufferOffset int    // reasoning 缓冲区的偏移量（用于处理跨窗口边界）
+	StreamDenied                bool   // 是否已拒绝（用于标记后续不再处理）
 	// 流式响应 chunk 缓冲区
 	StreamChunkBuffer     []StreamChunk // 存储所有 chunk，等待缓冲区满或 [DONE] 时处理
 	StreamChunkBufferSize int           // 当前缓冲区大小（字节数）

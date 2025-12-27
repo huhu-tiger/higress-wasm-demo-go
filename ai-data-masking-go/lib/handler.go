@@ -565,7 +565,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 // 缓冲10个最近的chunk，检测到敏感词则替换后一次性返回，没有检测到敏感词则正常返回
 // 缓冲区满或没有敏感词则返回，并清空缓冲区
 func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) []byte {
-	const bufferChunkCount = config.MaxBufferChunkCount
+	bufferChunkCount := int(pluginCtx.Config.MaxBufferChunkCount)
 
 	// 初始化缓冲区
 	if pluginCtx.StreamChunkBuffer == nil {
@@ -573,6 +573,8 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 		pluginCtx.StreamChunkBufferSize = 0
 		pluginCtx.StreamContentBuffer = ""
 		pluginCtx.StreamReasoningBuffer = ""
+		pluginCtx.StreamContentBufferOffset = 0
+		pluginCtx.StreamReasoningBufferOffset = 0
 	}
 
 	// 获取替换值
@@ -679,7 +681,7 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	// 1. 流结束
 	// 2. 缓冲区满（10个chunk）
 	// 3. 检测到敏感词
-	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= bufferChunkCount
+	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= int(bufferChunkCount)
 
 	// 检测累积缓冲区中是否包含敏感词
 	hasSensitiveWord := false
@@ -850,20 +852,37 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 
 	// 清空缓冲区，准备处理下一批数据（滑动窗口）
 	// 如果缓冲区很大，重新分配以释放内存
-	if cap(pluginCtx.StreamChunkBuffer) > 1024 {
-		wlog.LogWithLine("!!!![%s] ProcessOpenAIStreamReplaceResponse: streamChunkBuffer capacity is too large, reallocating", pluginName)
+	if cap(pluginCtx.StreamChunkBuffer) > int(pluginCtx.Config.MaxStreamChunkBufferLen) {
 		pluginCtx.StreamChunkBuffer = nil
 	}
-	wlog.LogWithLine("!!!![%s] ProcessOpenAIStreamReplaceResponse: streamChunkBuffer capacity is %d", pluginName, cap(pluginCtx.StreamChunkBuffer))
-
 	pluginCtx.StreamChunkBuffer = pluginCtx.StreamChunkBuffer[:0]
 	pluginCtx.StreamChunkBufferSize = 0
 
-	// 清空内容缓冲区（滑动窗口：只保留最新的数据）
-	// 注意：这里需要保留一些历史数据，以便处理跨越窗口边界的敏感词
-	// 但为了简化，我们清空缓冲区，因为已经处理了当前窗口的数据
-	pluginCtx.StreamContentBuffer = ""
-	pluginCtx.StreamReasoningBuffer = ""
+	// 保留内容缓冲区的尾部数据，以便检测跨越窗口边界的敏感词
+	// 保留长度 = 最长敏感词的长度（字节数），在配置解析时已计算
+	maxSensitiveWordLen := config.MaxSensitiveWordLength
+
+	// 保留 StreamContentBuffer 的最后 maxSensitiveWordLen 个字节
+	if len(pluginCtx.StreamContentBuffer) > maxSensitiveWordLen {
+		keepStart := len(pluginCtx.StreamContentBuffer) - maxSensitiveWordLen
+		pluginCtx.StreamContentBuffer = pluginCtx.StreamContentBuffer[keepStart:]
+		// 记录保留的起始位置，用于调整后续 chunk 的位置索引
+		pluginCtx.StreamContentBufferOffset = keepStart
+	} else {
+		// 如果缓冲区长度小于等于保留长度，保留全部
+		pluginCtx.StreamContentBufferOffset = 0
+	}
+
+	// 保留 StreamReasoningBuffer 的最后 maxSensitiveWordLen 个字节
+	if len(pluginCtx.StreamReasoningBuffer) > maxSensitiveWordLen {
+		keepStart := len(pluginCtx.StreamReasoningBuffer) - maxSensitiveWordLen
+		pluginCtx.StreamReasoningBuffer = pluginCtx.StreamReasoningBuffer[keepStart:]
+		// 记录保留的起始位置，用于调整后续 chunk 的位置索引
+		pluginCtx.StreamReasoningBufferOffset = keepStart
+	} else {
+		// 如果缓冲区长度小于等于保留长度，保留全部
+		pluginCtx.StreamReasoningBufferOffset = 0
+	}
 
 	resultBytes := []byte(result.String())
 	if len(resultBytes) == 0 {

@@ -63,6 +63,15 @@ static_resources:
                           "宝塔",
                           "宋江"
                         ],
+                        "deny_punctuation":[
+                          "。",
+                          "！",
+                          "？",
+                          "，",
+                          "、",
+                          "：",
+                          "；"
+                        ],
                         "deny_plot": {
                           "plot":"replace",
                           "value":"~~"

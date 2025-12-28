@@ -564,6 +564,22 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 // ProcessOpenAIStreamReplaceResponse 处理 OpenAI 流式 JSON 响应，使用固定数量缓冲区机制
 // 缓冲10个最近的chunk，检测到敏感词则替换后一次性返回，没有检测到敏感词则正常返回
 // 缓冲区满或没有敏感词则返回，并清空缓冲区
+// endsWithPunctuation 检查文本末尾是否包含配置的标点符号
+func endsWithPunctuation(text string, punctuationList []string) bool {
+	if len(text) == 0 || len(punctuationList) == 0 {
+		return false
+	}
+
+	// 检查文本末尾是否以配置的标点符号结尾
+	for _, punc := range punctuationList {
+		if punc != "" && strings.HasSuffix(text, punc) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) []byte {
 	bufferChunkCount := int(pluginCtx.Config.MaxBufferChunkCount)
 
@@ -590,6 +606,7 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	events := strings.Split(strings.TrimSpace(string(unifiedChunk)), "\n\n")
 
 	streamEnded := false
+	hasPunctuation := false // 标记是否遇到标点符号
 
 	// 处理当前 chunk 中的所有事件
 	for _, eventStr := range events {
@@ -652,10 +669,18 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 				// 将增量添加到缓冲区
 				if contentDelta != "" {
 					pluginCtx.StreamContentBuffer += contentDelta
+					// 检查缓冲区末尾是否包含配置的标点符号
+					if endsWithPunctuation(pluginCtx.StreamContentBuffer, pluginCtx.Config.DenyPunctuation) {
+						hasPunctuation = true
+					}
 				}
 
 				if reasoningDelta != "" {
 					pluginCtx.StreamReasoningBuffer += reasoningDelta
+					// 检查缓冲区末尾是否包含配置的标点符号
+					if endsWithPunctuation(pluginCtx.StreamReasoningBuffer, pluginCtx.Config.DenyPunctuation) {
+						hasPunctuation = true
+					}
 				}
 
 				return true
@@ -680,12 +705,13 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	// 检查是否需要处理缓冲区
 	// 1. 流结束
 	// 2. 缓冲区满（10个chunk）
-	// 3. 检测到敏感词
-	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= int(bufferChunkCount)
+	// 3. 遇到标点符号
+	// 4. 检测到敏感词
+	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= int(bufferChunkCount) || hasPunctuation
 
-	// 检测累积缓冲区中是否包含敏感词
+	// 如果需要处理缓冲区（流结束、缓冲区满或遇到标点符号），检测累积缓冲区中是否包含敏感词
 	hasSensitiveWord := false
-	if !shouldProcess && len(pluginCtx.StreamChunkBuffer) > 0 {
+	if shouldProcess && len(pluginCtx.StreamChunkBuffer) > 0 {
 		// 检测 content 缓冲区
 		if len(pluginCtx.StreamContentBuffer) > 0 {
 			if CheckMessage(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords, true) {

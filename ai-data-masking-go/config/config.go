@@ -37,6 +37,7 @@ type AiDataMaskingConfig struct {
 	StreamBuffer            uint32           `json:"stream_buffer"`
 	MaxBufferChunkCount     uint32           `json:"max_buffer_chunk_count"`      // 最长敏感词检测chunk个数
 	MaxStreamChunkBufferLen uint32           `json:"max_stream_chunk_buffer_len"` // 最长敏感词检测chunk大小
+	DenyPunctuation         []string         `json:"deny_punctuation"`            // 敏感词检测忽略的标点符号
 }
 
 type ResponseDenyPlot struct {

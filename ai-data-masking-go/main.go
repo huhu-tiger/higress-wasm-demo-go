@@ -561,7 +561,6 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 
 	if denyPlot == "replace" && pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
 		if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
-
 			processedChunk := lib.ProcessOpenAIStreamReplaceResponse(ctx, pluginCtx, chunk, isLastChunk)
 			wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response, chunk:%s, processedChunk:%s",
 				pluginName, string(chunk), string(processedChunk))

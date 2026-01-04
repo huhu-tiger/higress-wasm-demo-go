@@ -61,7 +61,8 @@ static_resources:
                         "deny_words": [
                           "测试敏感词",
                           "宝塔",
-                          "宋江"
+                          "宋",
+                          "唐僧"
                         ],
                         "deny_punctuation":[
                           "。",
@@ -73,7 +74,7 @@ static_resources:
                           "；"
                         ],
                         "deny_plot": {
-                          "plot":"replace",
+                          "plot":"rollback",
                           "value":"~~"
                         }
                       }

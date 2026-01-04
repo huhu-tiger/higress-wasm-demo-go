@@ -41,7 +41,7 @@ type AiDataMaskingConfig struct {
 }
 
 type ResponseDenyPlot struct {
-	Plot  string `json:"plot"`  // replace, stop,默认stop
+	Plot  string `json:"plot"`  // replace, stop,rollback 默认stop
 	Value string `json:"value"` // 如果是 replace，则替换为value，如果是stop，则返回deny_message
 }
 
@@ -76,11 +76,13 @@ type PluginContext struct {
 	MaxBufferChunkCount     uint32 // 最长敏感词检测chunk个数
 	MaxStreamChunkBufferLen uint32 // 最长敏感词检测chunk大小
 	// 流式响应缓冲区（滑动窗口）
-	StreamContentBuffer         string // content 缓冲区（用于敏感词检查）
-	StreamReasoningBuffer       string // reasoning 缓冲区（用于敏感词检查）
-	StreamContentBufferOffset   int    // content 缓冲区的偏移量（用于处理跨窗口边界）
-	StreamReasoningBufferOffset int    // reasoning 缓冲区的偏移量（用于处理跨窗口边界）
-	StreamDenied                bool   // 是否已拒绝（用于标记后续不再处理）
+	StreamContentBuffer         string       // content 缓冲区（用于敏感词检查）
+	StreamReasoningBuffer       string       // reasoning 缓冲区（用于敏感词检查）
+	StreamContentBufferOffset   int          // content 缓冲区的偏移量（用于处理跨窗口边界）
+	StreamReasoningBufferOffset int          // reasoning 缓冲区的偏移量（用于处理跨窗口边界）
+	StreamDenied                bool         // 是否已拒绝（用于标记后续不再处理）
+	StreamSeq                   int          // SSE 流序号，用于标识每个数据块
+	StreamRollbackSentSeqs      map[int]bool // 已发送rollback的seq集合（防止重复回退相同的chunk）
 	// 流式响应 chunk 缓冲区
 	StreamChunkBuffer     []StreamChunk // 存储所有 chunk，等待缓冲区满或 [DONE] 时处理
 	StreamChunkBufferSize int           // 当前缓冲区大小（字节数）
@@ -94,6 +96,7 @@ type StreamChunk struct {
 	ReasoningStart int    // 在 StreamReasoningBuffer 中的起始位置
 	ReasoningEnd   int    // 在 StreamReasoningBuffer 中的结束位置
 	IsDone         bool   // 是否是 [DONE] 标记
+	Seq            int    // SSE 流序号，用于标识每个数据块（rollback 策略使用）
 }
 
 type DenyModifyType string

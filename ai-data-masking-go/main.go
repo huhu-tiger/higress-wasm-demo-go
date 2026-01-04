@@ -558,6 +558,15 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 	if denyPlot == "" {
 		denyPlot = "stop" // 默认值
 	}
+	if denyPlot == "rollback" && pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
+		processedChunk := lib.ProcessOpenAIStreamRollbackResponse(ctx, pluginCtx, chunk, isLastChunk)
+		if processedChunk != nil {
+			wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI rollback response, chunk:%s, processedChunk:%s",
+				pluginName, string(chunk), string(processedChunk))
+			return processedChunk
+		}
+		return chunk
+	}
 
 	if denyPlot == "replace" && pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
 		if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
@@ -582,7 +591,6 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 
 		// 先处理 OpenAI JSON 响应（如果启用）,并且请求阶段是openai格式
 		if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
-
 			processedChunk, denied := lib.ProcessOpenAIStreamDenyResponse(ctx, pluginCtx, chunk, isLastChunk)
 			if denied {
 				// 检测到敏感词，标记为拒绝并返回截断的响应

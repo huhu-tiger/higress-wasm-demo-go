@@ -3,6 +3,7 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"ai-data-masking/config"
@@ -917,6 +918,388 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 
 	wlog.LogWithLine("[%s] ProcessOpenAIStreamReplaceResponse: returning %d bytes, hasSensitiveWord=%v",
 		pluginName, len(resultBytes), hasSensitiveWord)
+
+	return resultBytes
+}
+
+// ProcessOpenAIStreamRollbackResponse 处理 OpenAI 流式 JSON 响应，使用滑动窗口检测敏感词
+// 检测到敏感词后发送 rollback 事件，格式：{"type":"rollback","rollback_to":[8,9,10],"reason":"content_safety"}
+// SSE流内容直接返回前端，同时维护滑动窗口缓冲区用于检测敏感词
+func ProcessOpenAIStreamRollbackResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) []byte {
+	bufferChunkCount := int(pluginCtx.Config.MaxBufferChunkCount)
+
+	// 初始化缓冲区
+	if pluginCtx.StreamChunkBuffer == nil {
+		pluginCtx.StreamChunkBuffer = make([]config.StreamChunk, 0)
+		pluginCtx.StreamChunkBufferSize = 0
+		pluginCtx.StreamContentBuffer = ""
+		pluginCtx.StreamReasoningBuffer = ""
+		pluginCtx.StreamContentBufferOffset = 0
+		pluginCtx.StreamReasoningBufferOffset = 0
+		pluginCtx.StreamSeq = 0
+	}
+	// 确保 StreamRollbackSentSeqs 已初始化（即使 StreamChunkBuffer 已存在）
+	if pluginCtx.StreamRollbackSentSeqs == nil {
+		pluginCtx.StreamRollbackSentSeqs = make(map[int]bool)
+	}
+
+	// 使用 wrapper.UnifySSEChunk 统一处理 SSE 格式
+	unifiedChunk := wrapper.UnifySSEChunk(chunk)
+
+	// 按 \n\n 分割 SSE 事件（每个事件可能包含多行）
+	events := strings.Split(strings.TrimSpace(string(unifiedChunk)), "\n\n")
+
+	streamEnded := false
+	hasPunctuation := false // 标记是否遇到标点符号
+
+	// 用于存储当前批次的输出（直接返回的chunk）
+	var result strings.Builder
+
+	// 处理当前 chunk 中的所有事件
+	for _, eventStr := range events {
+		if eventStr == "" {
+			continue
+		}
+
+		// 检查是否是 [DONE] 标记
+		if strings.Contains(eventStr, "data: [DONE]") {
+			streamEnded = true
+			// 添加 [DONE] chunk
+			pluginCtx.StreamChunkBuffer = append(pluginCtx.StreamChunkBuffer, config.StreamChunk{
+				Data:   []byte(eventStr + "\n\n"),
+				IsDone: true,
+				Seq:    0, // [DONE] 不分配seq
+			})
+			pluginCtx.StreamChunkBufferSize += len(eventStr) + 2
+			// [DONE] 直接返回
+			result.WriteString(eventStr + "\n\n")
+			break
+		}
+
+		// 解析事件，提取 content 和 reasoning 增量
+		lines := strings.Split(eventStr, "\n")
+		contentStart := len(pluginCtx.StreamContentBuffer)
+		reasoningStart := len(pluginCtx.StreamReasoningBuffer)
+
+		var jsonStr string
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			// 处理 SSE 格式：data: {...} 或 data:{...}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			jsonStr = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			break
+		}
+
+		if jsonStr == "" {
+			// 无法解析，直接返回原始数据
+			result.WriteString(eventStr + "\n\n")
+			continue
+		}
+
+		// 解析 JSON
+		root := gjson.Parse(jsonStr)
+		if !root.Exists() {
+			result.WriteString(eventStr + "\n\n")
+			continue
+		}
+
+		// 检查是否是 OpenAI 流式响应格式
+		choices := root.Get("choices")
+		if !choices.Exists() || !choices.IsArray() {
+			result.WriteString(eventStr + "\n\n")
+			continue
+		}
+
+		// 检查是否有 delta 需要处理
+		hasDelta := false
+		choices.ForEach(func(key, choice gjson.Result) bool {
+			delta := choice.Get("delta")
+			if delta.Exists() {
+				hasDelta = true
+				return false // 找到 delta，停止遍历
+			}
+			return true
+		})
+
+		// 如果没有 delta，直接返回原始数据
+		if !hasDelta {
+			result.WriteString(eventStr + "\n\n")
+			continue
+		}
+
+		// 递增 seq 序号
+		pluginCtx.StreamSeq++
+		seq := pluginCtx.StreamSeq
+
+		// 处理每个 choice，提取 content 和 reasoning 增量
+		var contentDelta, reasoningDelta string
+		choices.ForEach(func(key, choice gjson.Result) bool {
+			delta := choice.Get("delta")
+			if !delta.Exists() {
+				return true
+			}
+
+			contentDelta = delta.Get("content").String()
+			reasoningDelta = delta.Get("reasoning").String()
+
+			return true
+		})
+
+		// 将增量添加到缓冲区
+		if contentDelta != "" {
+			pluginCtx.StreamContentBuffer += contentDelta
+			// 检查缓冲区末尾是否包含配置的标点符号
+			if endsWithPunctuation(pluginCtx.StreamContentBuffer, pluginCtx.Config.DenyPunctuation) {
+				hasPunctuation = true
+			}
+		}
+
+		if reasoningDelta != "" {
+			pluginCtx.StreamReasoningBuffer += reasoningDelta
+			// 检查缓冲区末尾是否包含配置的标点符号
+			if endsWithPunctuation(pluginCtx.StreamReasoningBuffer, pluginCtx.Config.DenyPunctuation) {
+				hasPunctuation = true
+			}
+		}
+
+		// 记录 chunk 信息
+		contentEnd := len(pluginCtx.StreamContentBuffer)
+		reasoningEnd := len(pluginCtx.StreamReasoningBuffer)
+
+		// 在 delta 中添加 type 和 seq
+		newJsonStr := jsonStr
+		choices.ForEach(func(key, choice gjson.Result) bool {
+			idx := key.Int()
+			delta := choice.Get("delta")
+			if !delta.Exists() {
+				return true
+			}
+
+			deltaPath := fmt.Sprintf("choices.%d.delta", idx)
+
+			// 添加 type: "data"
+			var err error
+			newJsonStr, err = sjson.Set(newJsonStr, deltaPath+".type", "data")
+			if err != nil {
+				wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: failed to set type: %v", pluginName, err)
+				return true
+			}
+
+			// 添加 seq 序号
+			newJsonStr, err = sjson.Set(newJsonStr, deltaPath+".seq", seq)
+			if err != nil {
+				wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: failed to set seq: %v", pluginName, err)
+				return true
+			}
+
+			return true
+		})
+
+		// 保存到缓冲区
+		pluginCtx.StreamChunkBuffer = append(pluginCtx.StreamChunkBuffer, config.StreamChunk{
+			Data:           []byte("data: " + newJsonStr + "\n\n"),
+			ContentStart:   contentStart,
+			ContentEnd:     contentEnd,
+			ReasoningStart: reasoningStart,
+			ReasoningEnd:   reasoningEnd,
+			IsDone:         false,
+			Seq:            seq,
+		})
+		pluginCtx.StreamChunkBufferSize += len(eventStr) + 2
+
+		// 直接返回添加了seq的chunk（不缓冲）
+		result.WriteString("data: " + newJsonStr + "\n\n")
+
+		// 实时检测：每个chunk处理完后立即检测整个缓冲区是否包含敏感词
+		// 检测整个缓冲区（包括可能跨越chunk的敏感词），而不是只检测新增部分
+		contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
+		reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
+
+		// 添加调试日志
+		if len(pluginCtx.StreamContentBuffer) > 0 || len(pluginCtx.StreamReasoningBuffer) > 0 {
+			wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: seq=%d, contentBufferLen=%d, reasoningBufferLen=%d, contentMatches=%d, reasoningMatches=%d, chunkBufferSize=%d",
+				seq, len(pluginCtx.StreamContentBuffer), len(pluginCtx.StreamReasoningBuffer), len(contentMatches), len(reasoningMatches), len(pluginCtx.StreamChunkBuffer))
+		}
+
+		// 如果有敏感词匹配，收集所有涉及的seq（排除已经发送过rollback的seq）
+		if len(contentMatches) > 0 || len(reasoningMatches) > 0 {
+
+			// 收集所有涉及的 chunk 的 seq（排除已经发送过 rollback 的 seq）
+			rollbackSeqs := make(map[int]bool)
+
+			// 合并匹配结果
+			allMatches := make([]struct {
+				match     MatchResult
+				isContent bool
+			}, 0, len(contentMatches)+len(reasoningMatches))
+			for _, match := range contentMatches {
+				allMatches = append(allMatches, struct {
+					match     MatchResult
+					isContent bool
+				}{match, true})
+			}
+			for _, match := range reasoningMatches {
+				allMatches = append(allMatches, struct {
+					match     MatchResult
+					isContent bool
+				}{match, false})
+			}
+
+			// 找到所有与敏感词位置重叠的 chunk
+			for _, item := range allMatches {
+				match := item.match
+				isContent := item.isContent
+				for _, streamChunk := range pluginCtx.StreamChunkBuffer {
+					if streamChunk.IsDone || streamChunk.Seq == 0 {
+						continue
+					}
+
+					var chunkStart, chunkEnd int
+					if isContent {
+						chunkStart = streamChunk.ContentStart
+						chunkEnd = streamChunk.ContentEnd
+					} else {
+						chunkStart = streamChunk.ReasoningStart
+						chunkEnd = streamChunk.ReasoningEnd
+					}
+
+					// 检查敏感词位置是否与 chunk 位置重叠
+					// 只包含尚未发送过 rollback 的 seq
+					if (match.StartPos >= chunkStart && match.StartPos < chunkEnd) ||
+						(match.EndPos > chunkStart && match.EndPos <= chunkEnd) ||
+						(match.StartPos <= chunkStart && match.EndPos >= chunkEnd) {
+						// 只添加尚未发送过 rollback 的 seq
+						if !pluginCtx.StreamRollbackSentSeqs[streamChunk.Seq] {
+							rollbackSeqs[streamChunk.Seq] = true
+							wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: sensitive word '%s' detected in %s, marking seq %d (pos: %d-%d, chunk: %d-%d)",
+								pluginName, match.MatchedWord, map[bool]string{true: "content", false: "reasoning"}[isContent], streamChunk.Seq, match.StartPos, match.EndPos, chunkStart, chunkEnd)
+						}
+					}
+				}
+			}
+
+			// 如果有需要回退的 seq，立即发送 rollback 事件
+			wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: collected rollbackSeqs count=%d, sentSeqs count=%d",
+				pluginName, len(rollbackSeqs), len(pluginCtx.StreamRollbackSentSeqs))
+			if len(rollbackSeqs) > 0 {
+				// 将 seq 转换为排序的数组
+				rollbackSeqList := make([]int, 0, len(rollbackSeqs))
+				for seq := range rollbackSeqs {
+					rollbackSeqList = append(rollbackSeqList, seq)
+				}
+				// 排序
+				sort.Ints(rollbackSeqList)
+
+				// 获取 id 和 model（从当前处理的 JSON 中获取）
+				id := "chatcmpl-abc"
+				model := ""
+				if pluginCtx.OpenAIRequest != nil {
+					model = pluginCtx.OpenAIRequest.Model
+				}
+				// 从当前处理的 JSON 中获取 id 和 model
+				if idVal := root.Get("id").String(); idVal != "" {
+					id = idVal
+				}
+				if modelVal := root.Get("model").String(); modelVal != "" {
+					model = modelVal
+				}
+
+				// 构建 rollback 事件 JSON
+				rollbackDelta := map[string]interface{}{
+					"type":        "rollback",
+					"rollback_to": rollbackSeqList,
+					"reason":      "content_safety",
+				}
+				rollbackChoice := map[string]interface{}{
+					"index": 0,
+					"delta": rollbackDelta,
+				}
+				rollbackData := map[string]interface{}{
+					"id":      id,
+					"object":  "chat.completion.chunk",
+					"choices": []interface{}{rollbackChoice},
+				}
+				if model != "" {
+					rollbackData["model"] = model
+				}
+
+				rollbackJson, err := json.Marshal(rollbackData)
+				if err != nil {
+					wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: failed to marshal rollback event: %v", pluginName, err)
+				} else {
+					// 立即添加 rollback 事件到结果（紧跟在当前chunk后面）
+					result.WriteString("data: " + string(rollbackJson) + "\n\n")
+					// 记录已发送 rollback 的 seq，防止重复回退相同的 chunk
+					for _, seq := range rollbackSeqList {
+						pluginCtx.StreamRollbackSentSeqs[seq] = true
+					}
+					wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: sending rollback event immediately for seqs: %v (total sent seqs: %d)", pluginName, rollbackSeqList, len(pluginCtx.StreamRollbackSentSeqs))
+				}
+			} else {
+				wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: no new seqs to rollback (all seqs already sent or no matching chunks)", pluginName)
+			}
+		} else {
+			wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: no sensitive words found in buffer (contentMatches=%d, reasoningMatches=%d)", pluginName, len(contentMatches), len(reasoningMatches))
+		}
+	}
+
+	// 检查是否需要处理缓冲区（滑动窗口和标点符号控制）
+	// 1. 流结束
+	// 2. 缓冲区满（达到最大chunk数）
+	// 3. 遇到标点符号
+	// 注意：敏感词检测已经在循环内实时进行了，这里只负责滑动窗口管理
+	shouldProcess := streamEnded || len(pluginCtx.StreamChunkBuffer) >= int(bufferChunkCount) || hasPunctuation
+
+	// 清空缓冲区，准备处理下一批数据（滑动窗口）
+	// shouldProcess 已经在上面定义过了，这里直接使用
+	// 如果缓冲区很大，重新分配以释放内存
+	if shouldProcess {
+		if cap(pluginCtx.StreamChunkBuffer) > int(pluginCtx.Config.MaxStreamChunkBufferLen) {
+			pluginCtx.StreamChunkBuffer = nil
+		}
+		pluginCtx.StreamChunkBuffer = pluginCtx.StreamChunkBuffer[:0]
+		pluginCtx.StreamChunkBufferSize = 0
+
+		// 保留内容缓冲区的尾部数据，以便检测跨越窗口边界的敏感词
+		// 保留长度 = 最长敏感词的长度（字节数），在配置解析时已计算
+		maxSensitiveWordLen := config.MaxSensitiveWordLength
+
+		// 保留 StreamContentBuffer 的最后 maxSensitiveWordLen 个字节
+		if len(pluginCtx.StreamContentBuffer) > maxSensitiveWordLen {
+			keepStart := len(pluginCtx.StreamContentBuffer) - maxSensitiveWordLen
+			pluginCtx.StreamContentBuffer = pluginCtx.StreamContentBuffer[keepStart:]
+			// 记录保留的起始位置，用于调整后续 chunk 的位置索引
+			pluginCtx.StreamContentBufferOffset = keepStart
+		} else {
+			// 如果缓冲区长度小于等于保留长度，保留全部
+			pluginCtx.StreamContentBufferOffset = 0
+		}
+
+		// 保留 StreamReasoningBuffer 的最后 maxSensitiveWordLen 个字节
+		if len(pluginCtx.StreamReasoningBuffer) > maxSensitiveWordLen {
+			keepStart := len(pluginCtx.StreamReasoningBuffer) - maxSensitiveWordLen
+			pluginCtx.StreamReasoningBuffer = pluginCtx.StreamReasoningBuffer[keepStart:]
+			// 记录保留的起始位置，用于调整后续 chunk 的位置索引
+			pluginCtx.StreamReasoningBufferOffset = keepStart
+		} else {
+			// 如果缓冲区长度小于等于保留长度，保留全部
+			pluginCtx.StreamReasoningBufferOffset = 0
+		}
+	}
+
+	resultBytes := []byte(result.String())
+	if len(resultBytes) == 0 {
+		return nil
+	}
+
+	wlog.LogWithLine("[%s] ProcessOpenAIStreamRollbackResponse: returning %d bytes",
+		pluginName, len(resultBytes))
 
 	return resultBytes
 }

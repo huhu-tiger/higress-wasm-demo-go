@@ -12,12 +12,38 @@ const pluginName = "ai-data-masking"
 
 var (
 	// 缓存已构建的匹配器，避免重复构建
-	customMatcherCache *ahocorasick.Matcher
-	customWordsCache   []string
-	systemMatcherCache *ahocorasick.Matcher
-	systemWordsCache   []string
-	cacheMutex         sync.RWMutex
+	customMatcherCache    *ahocorasick.Matcher
+	customWordsCache      []string
+	systemMatcherCache    *ahocorasick.Matcher
+	systemWordsCache      []string
+	cacheMutex            sync.RWMutex
+	systemDenyWordsBatchs [][]string
 )
+
+// InitSystemDenyWordsBatches 初始化系统敏感词批次
+// 根据批次大小将系统敏感词分割成多个批次
+func InitSystemDenyWordsBatches(systemDenyWords []string) {
+	if len(systemDenyWords) == 0 {
+		systemDenyWordsBatchs = nil
+		return
+	}
+
+	batchSize := config.MAX_SYSTEM_DENY_WORDS_BATCH_SIZE
+	batchCount := (len(systemDenyWords) + batchSize - 1) / batchSize // 向上取整
+
+	systemDenyWordsBatchs = make([][]string, 0, batchCount)
+	for i := 0; i < len(systemDenyWords); i += batchSize {
+		end := i + batchSize
+		if end > len(systemDenyWords) {
+			end = len(systemDenyWords)
+		}
+		batch := systemDenyWords[i:end]
+		systemDenyWordsBatchs = append(systemDenyWordsBatchs, batch)
+	}
+
+	wlog.LogWithLine("[%s] InitSystemDenyWordsBatches: total words=%d, batch size=%d, batch count=%d",
+		pluginName, len(systemDenyWords), batchSize, len(systemDenyWordsBatchs))
+}
 
 // CheckMessage 检查消息中是否包含敏感词
 // isStream: true 表示流式处理，false 表示非流式处理
@@ -50,16 +76,29 @@ func checkNonStream(message string, config *config.AiDataMaskingConfig, systemDe
 			return true
 		}
 	}
-
-	// 检查系统敏感词
-	if config.SystemDeny && len(systemDenyWords) > 0 {
-		matcher := getOrBuildSystemMatcher(systemDenyWords)
-		matches := matcher.Match(messageBytes)
-		if len(matches) > 0 {
-			// matches 返回的是匹配的字典索引
-			matchedWord := systemDenyWords[matches[0]]
-			wlog.LogWithLine("[%s] system deny word %s matched from %s", pluginName, matchedWord, message)
-			return true
+	wlog.LogWithLine("[%s] 00000000checkNonStream system deny words batch count: %d", pluginName, len(systemDenyWordsBatchs))
+	// 检查系统敏感词（请求阶段使用批次匹配）
+	if config.SystemDeny {
+		wlog.LogWithLine("[%s] 11111111checkNonStream system deny words batch count: %d", pluginName, len(systemDenyWordsBatchs))
+		// 如果传入了 systemDenyWords（不为空），说明是请求阶段，使用批次匹配
+		if len(systemDenyWords) > 0 && len(systemDenyWordsBatchs) > 0 {
+			wlog.LogWithLine("[%s] 22222222checkNonStream system deny words batch count: %d", pluginName, len(systemDenyWordsBatchs))
+			// 循环遍历每个批次，为每个批次创建匹配器进行过滤
+			for batchIdx, batch := range systemDenyWordsBatchs {
+				if len(batch) == 0 {
+					continue
+				}
+				wlog.LogWithLine("[%s] 33333333checkNonStream system deny words batch count: %d", pluginName, len(systemDenyWordsBatchs))
+				matcher := getOrBuildSystemMatcher(batch)
+				matches := matcher.Match(messageBytes)
+				if len(matches) > 0 {
+					// 匹配到敏感词，中断循环并返回
+					matchedWord := batch[matches[0]]
+					wlog.LogWithLine("[%s] checkNonStream system deny word %s matched from batch %d/%d, message: %s",
+						pluginName, matchedWord, batchIdx+1, len(systemDenyWordsBatchs), message)
+					return true
+				}
+			}
 		}
 	}
 
@@ -86,15 +125,25 @@ func checkStream(chunk string, config *config.AiDataMaskingConfig, systemDenyWor
 		}
 	}
 
-	// 检查系统敏感词
-	if config.SystemDeny && len(systemDenyWords) > 0 {
-		matcher := getOrBuildSystemMatcher(systemDenyWords)
-		matches := matcher.Match(chunkBytes)
-		if len(matches) > 0 {
-			// matches 返回的是匹配的字典索引
-			matchedWord := systemDenyWords[matches[0]]
-			wlog.LogWithLine("[%s] [stream] system deny word %s matched from chunk: %s", pluginName, matchedWord, chunk)
-			return true
+	// 检查系统敏感词（请求阶段使用批次匹配）
+	if config.SystemDeny {
+		// 如果传入了 systemDenyWords（不为空），说明是请求阶段，使用批次匹配
+		if len(systemDenyWords) > 0 && len(systemDenyWordsBatchs) > 0 {
+			// 循环遍历每个批次，为每个批次创建匹配器进行过滤
+			for batchIdx, batch := range systemDenyWordsBatchs {
+				if len(batch) == 0 {
+					continue
+				}
+				matcher := ahocorasick.NewStringMatcher(batch)
+				matches := matcher.Match(chunkBytes)
+				if len(matches) > 0 {
+					// 匹配到敏感词，中断循环并返回
+					matchedWord := batch[matches[0]]
+					wlog.LogWithLine("[%s] [stream] checkStream system deny word %s matched from batch %d/%d, chunk: %s",
+						pluginName, matchedWord, batchIdx+1, len(systemDenyWordsBatchs), chunk)
+					return true
+				}
+			}
 		}
 	}
 

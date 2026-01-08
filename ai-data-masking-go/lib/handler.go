@@ -201,8 +201,9 @@ func ProcessOpenAIResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginCont
 		reasoning := choice.Get("message.reasoning").String()
 
 		// 先做命中检查（响应阶段，非流式）
-		if CheckMessage(content, pluginCtx.Config, config.SystemDenyWords, false) ||
-			CheckMessage(reasoning, pluginCtx.Config, config.SystemDenyWords, false) {
+		// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+		if CheckMessage(content, pluginCtx.Config, nil, false) ||
+			CheckMessage(reasoning, pluginCtx.Config, nil, false) {
 			// 命中直接拒绝，不再继续遍历
 			denied = true
 			return false // 停止遍历
@@ -253,7 +254,8 @@ func ProcessOpenAIResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginCont
 // handleRawResponse 处理非 OpenAI 的原始响应体
 func ProcessRawResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, bodyStr string) types.Action {
 	// 命中敏感词直接拒绝（非流式响应）
-	if CheckMessage(bodyStr, pluginCtx.Config, config.SystemDenyWords, false) {
+	// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+	if CheckMessage(bodyStr, pluginCtx.Config, nil, false) {
 		wlog.LogWithLine("[%s] ProcessRawResponse: sensitive word detected, calling deny() - isStream=%v, isOpenAI=%v",
 			pluginName, pluginCtx.OpenAIRequest.Stream, pluginCtx.RequestDenyModifyType)
 		action := DenyHandler(ctx, pluginCtx)
@@ -433,9 +435,10 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 		lastChunk := pluginCtx.StreamChunkBuffer[len(pluginCtx.StreamChunkBuffer)-1]
 		if !lastChunk.IsDone {
 			// 检测新增的 content 部分
+			// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
 			if lastChunk.ContentEnd > lastChunk.ContentStart {
 				newContent := pluginCtx.StreamContentBuffer[lastChunk.ContentStart:lastChunk.ContentEnd]
-				if CheckMessage(newContent, pluginCtx.Config, config.SystemDenyWords, false) {
+				if CheckMessage(newContent, pluginCtx.Config, nil, false) {
 					// 发现敏感词，立即处理
 					shouldProcess = true
 				}
@@ -443,7 +446,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 			// 检测新增的 reasoning 部分
 			if !shouldProcess && lastChunk.ReasoningEnd > lastChunk.ReasoningStart {
 				newReasoning := pluginCtx.StreamReasoningBuffer[lastChunk.ReasoningStart:lastChunk.ReasoningEnd]
-				if CheckMessage(newReasoning, pluginCtx.Config, config.SystemDenyWords, false) {
+				if CheckMessage(newReasoning, pluginCtx.Config, nil, false) {
 					// 发现敏感词，立即处理
 					shouldProcess = true
 				}
@@ -463,8 +466,9 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 
 	// 检查累积缓冲区中是否包含敏感词，并获取所有匹配的位置
 	// 这样可以识别跨越多个 chunk 的敏感词
-	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
-	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
+	// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, nil)
+	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, nil)
 
 	// 优化：合并匹配结果，减少遍历次数
 	allMatches := make([]struct {
@@ -714,15 +718,16 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	hasSensitiveWord := false
 	if shouldProcess && len(pluginCtx.StreamChunkBuffer) > 0 {
 		// 检测 content 缓冲区
+		// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
 		if len(pluginCtx.StreamContentBuffer) > 0 {
-			if CheckMessage(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords, true) {
+			if CheckMessage(pluginCtx.StreamContentBuffer, pluginCtx.Config, nil, true) {
 				hasSensitiveWord = true
 				shouldProcess = true
 			}
 		}
 		// 检测 reasoning 缓冲区
 		if !hasSensitiveWord && len(pluginCtx.StreamReasoningBuffer) > 0 {
-			if CheckMessage(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords, true) {
+			if CheckMessage(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, nil, true) {
 				hasSensitiveWord = true
 				shouldProcess = true
 			}
@@ -736,8 +741,9 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 
 	// 处理缓冲区：检测敏感词并替换
 	// 查找所有敏感词匹配的位置
-	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
-	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
+	// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+	contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, nil)
+	reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, nil)
 
 	// 更新敏感词检测结果
 	hasSensitiveWord = len(contentMatches) > 0 || len(reasoningMatches) > 0
@@ -764,8 +770,9 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	if hasSensitiveWord {
 		// 有敏感词：替换后返回
 		// 替换完整文本中的敏感词
-		replacedContent := ReplaceSensitiveWordsWithValue(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords, replaceValue)
-		replacedReasoning := ReplaceSensitiveWordsWithValue(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+		// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+		replacedContent := ReplaceSensitiveWordsWithValue(pluginCtx.StreamContentBuffer, pluginCtx.Config, nil, replaceValue)
+		replacedReasoning := ReplaceSensitiveWordsWithValue(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, nil, replaceValue)
 
 		// 由于 ReplaceSensitiveWordsWithValue 保持字符数（rune）相等，但字节数可能不同
 		// 我们需要按字符位置（rune）来映射，而不是按字节位置
@@ -1118,8 +1125,9 @@ func ProcessOpenAIStreamRollbackResponse(ctx wrapper.HttpContext, pluginCtx *con
 
 		// 实时检测：每个chunk处理完后立即检测整个缓冲区是否包含敏感词
 		// 检测整个缓冲区（包括可能跨越chunk的敏感词），而不是只检测新增部分
-		contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, config.SystemDenyWords)
-		reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, config.SystemDenyWords)
+		// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
+		contentMatches := FindSensitiveWordMatches(pluginCtx.StreamContentBuffer, pluginCtx.Config, nil)
+		reasoningMatches := FindSensitiveWordMatches(pluginCtx.StreamReasoningBuffer, pluginCtx.Config, nil)
 
 		// 添加调试日志
 		if len(pluginCtx.StreamContentBuffer) > 0 || len(pluginCtx.StreamReasoningBuffer) > 0 {
@@ -1450,8 +1458,9 @@ func DenyHandlerResponseReplaceNonStream(ctx wrapper.HttpContext, pluginCtx *con
 			reasoning := choice.Get("message.reasoning").String()
 
 			// 替换 content 中的敏感词
+			// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
 			if content != "" {
-				newContent := ReplaceSensitiveWordsWithValue(content, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+				newContent := ReplaceSensitiveWordsWithValue(content, pluginCtx.Config, nil, replaceValue)
 				if newContent != content {
 					basePath := fmt.Sprintf("choices.%d.message.content", idx)
 					var err error
@@ -1464,7 +1473,7 @@ func DenyHandlerResponseReplaceNonStream(ctx wrapper.HttpContext, pluginCtx *con
 
 			// 替换 reasoning 中的敏感词
 			if reasoning != "" {
-				newReasoning := ReplaceSensitiveWordsWithValue(reasoning, pluginCtx.Config, config.SystemDenyWords, replaceValue)
+				newReasoning := ReplaceSensitiveWordsWithValue(reasoning, pluginCtx.Config, nil, replaceValue)
 				if newReasoning != reasoning {
 					basePath := fmt.Sprintf("choices.%d.message.reasoning", idx)
 					var err error

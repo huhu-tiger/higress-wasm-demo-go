@@ -185,13 +185,13 @@ func CalculateMaxSensitiveWordLength(cfg *config.AiDataMaskingConfig) int {
 	}
 
 	// 检查系统敏感词
-	if cfg.SystemDeny && len(config.SystemDenyWords) > 0 {
-		for _, word := range config.SystemDenyWords {
-			if utf8.RuneCountInString(word) > maxWordLen {
-				maxWordLen = utf8.RuneCountInString(word)
-			}
-		}
-	}
+	// if cfg.SystemDeny && len(config.SystemDenyWords) > 0 {
+	// 	for _, word := range config.SystemDenyWords {
+	// 		if utf8.RuneCountInString(word) > maxWordLen {
+	// 			maxWordLen = utf8.RuneCountInString(word)
+	// 		}
+	// 	}
+	// }
 
 	// 如果没有任何敏感词，返回一个默认值（比如 20 字节）
 	// 这样可以保留一些历史数据，以防万一

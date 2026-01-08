@@ -15,6 +15,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -30,6 +31,9 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
+
+//go:embed resources/*
+var resourcesFS embed.FS
 
 func main() {}
 
@@ -133,10 +137,22 @@ func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
 		}
 		cfg.ResponseDenyPlot.Value = denyPlotJson.Get("value").String()
 	}
+	if cfg.SystemDeny {
+		// 从资源文件加载系统敏感词
+		systemWords, err := config.LoadSystemDenyWords(resourcesFS)
+		if err != nil {
+			wlog.LogWithLine("[%s] Failed to load system deny words: %v", pluginName, err)
+		} else {
+			config.SystemDenyWords = systemWords
+			wlog.LogWithLine("[%s] Loaded %d system deny words from resources", pluginName, len(config.SystemDenyWords))
+		}
 
-	// 计算最长敏感词长度（在启动时计算，避免流处理时重复计算）
-	config.MaxSensitiveWordLength = lib.CalculateMaxSensitiveWordLength(cfg)
+		// 初始化系统敏感词批次（在启动时初始化，避免重复初始化）
+		lib.InitSystemDenyWordsBatches(config.SystemDenyWords)
 
+		// 计算最长敏感词长度（在启动时计算，避免流处理时重复计算）
+		config.MaxSensitiveWordLength = lib.CalculateMaxSensitiveWordLength(cfg)
+	}
 	MaxBufferChunkCount := json.Get("max_buffer_chunk_count").Uint()
 	if MaxBufferChunkCount == 0 {
 		cfg.MaxBufferChunkCount = config.DefaultMaxBufferChunkCount
@@ -153,9 +169,9 @@ func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
 	// 打印所有配置的 JSON（使用 gjson 的 Raw 字段获取原始 JSON）
 
 	wlog.LogWithLine("[%s] Configuration:\n%s", pluginName, string(lib.PrintConfig(cfg)))
-	wlog.LogWithLine("[%s] 最大敏感词重叠边界长度: %d", pluginName, config.MaxSensitiveWordLength)
-	wlog.LogWithLine("[%s] 最长敏感词检测chunk个数: %d", pluginName, cfg.MaxBufferChunkCount)
-	wlog.LogWithLine("[%s] 最长敏感词检测chunk大小: %d", pluginName, cfg.MaxStreamChunkBufferLen)
+	wlog.LogWithLine("[%s] 最大返回敏感词重叠边界长度: %d", pluginName, config.MaxSensitiveWordLength)
+	wlog.LogWithLine("[%s] 最长返回敏感词检测chunk个数: %d", pluginName, cfg.MaxBufferChunkCount)
+	wlog.LogWithLine("[%s] 最长返回敏感词检测chunk大小: %d", pluginName, cfg.MaxStreamChunkBufferLen)
 
 	return nil
 }

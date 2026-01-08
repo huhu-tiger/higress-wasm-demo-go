@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bufio"
+	"io/fs"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -20,6 +23,10 @@ const (
 )
 
 var MaxSensitiveWordLength int = 0 // 最长敏感词长度（字节数），在配置解析时计算
+
+const (
+	MAX_SYSTEM_DENY_WORDS_BATCH_SIZE = 200
+)
 
 // AiDataMaskingConfig 插件配置
 type AiDataMaskingConfig struct {
@@ -136,9 +143,65 @@ func (s Step) IsValid() bool {
 }
 
 var (
-	// 系统敏感词库（简化版，实际应该从文件加载）
-	SystemDenyWords = []string{
-		// 这里可以添加系统敏感词
-		// 实际实现应该从资源文件加载
-	}
+	// 系统敏感词库（从资源文件加载）
+	SystemDenyWords = []string{}
 )
+
+// LoadSystemDenyWords 从资源文件加载系统敏感词
+func LoadSystemDenyWords(resourcesFS fs.FS) ([]string, error) {
+	var words []string
+	wordMap := make(map[string]bool) // 用于去重
+
+	// 加载中文敏感词文件
+	chineseFile, err := resourcesFS.Open("resources/sensitive_word_dict.txt")
+	if err == nil {
+		defer chineseFile.Close()
+		scanner := bufio.NewScanner(chineseFile)
+		for scanner.Scan() {
+			word := strings.TrimSpace(scanner.Text())
+			if word != "" && !wordMap[word] {
+				words = append(words, word)
+				wordMap[word] = true
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 加载英文敏感词文件
+	englishFile, err := resourcesFS.Open("resources/sensitive_word_dict_en.txt")
+	if err == nil {
+		defer englishFile.Close()
+		scanner := bufio.NewScanner(englishFile)
+		for scanner.Scan() {
+			word := strings.TrimSpace(scanner.Text())
+			if word != "" && !wordMap[word] {
+				words = append(words, word)
+				wordMap[word] = true
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 加载合并的敏感词文件
+	mergedFile, err := resourcesFS.Open("resources/sensitive_word_dict_merged.txt")
+	if err == nil {
+		defer mergedFile.Close()
+		scanner := bufio.NewScanner(mergedFile)
+		for scanner.Scan() {
+			word := strings.TrimSpace(scanner.Text())
+			if word != "" && !wordMap[word] {
+				words = append(words, word)
+				wordMap[word] = true
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return words, nil
+}

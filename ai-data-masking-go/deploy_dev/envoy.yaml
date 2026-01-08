@@ -53,7 +53,7 @@ static_resources:
                           "prompt",
                           "input.messages.#.content.0.text"
                         ],
-                        "system_deny": false,
+                        "system_deny": true,
                         "deny_code": 403,
                         "deny_message": "提问或回答中包含敏感词，已被屏蔽",
                         "deny_raw_message": "{\"errmsg\":\"提问或回答中包含敏感词，已被屏蔽\"}",
@@ -61,7 +61,7 @@ static_resources:
                         "deny_words": [
                           "测试敏感词",
                           "宝塔",
-                          "宋",
+                          "宋江",
                           "唐僧"
                         ],
                         "deny_punctuation":[
@@ -74,7 +74,7 @@ static_resources:
                           "；"
                         ],
                         "deny_plot": {
-                          "plot":"rollback",
+                          "plot":"replace",
                           "value":"~~"
                         }
                       }

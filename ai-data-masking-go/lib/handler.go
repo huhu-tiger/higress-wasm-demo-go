@@ -54,8 +54,6 @@ func ProcessOpenAIRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginConte
 
 	// 遍历 messages 数组
 	messages.ForEach(func(key, v gjson.Result) bool {
-		idx := key.Int()
-
 		content := v.Get("content").String()
 		reasoningContent := v.Get("reasoning_content").String()
 
@@ -66,27 +64,7 @@ func ProcessOpenAIRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginConte
 			return false
 		}
 
-		// 替换敏感词
-		newContent := ReplaceMessage(content, pluginCtx)
-		newReasoningContent := ReplaceMessage(reasoningContent, pluginCtx)
-
-		// 如果有变更，用 sjson 回写
-		basePath := fmt.Sprintf("messages.%d.", idx)
-
-		if newContent != content {
-			var err error
-			bodyStr, err = sjson.Set(bodyStr, basePath+"content", newContent)
-			if err == nil {
-				modified = true
-			}
-		}
-		if newReasoningContent != reasoningContent {
-			var err error
-			bodyStr, err = sjson.Set(bodyStr, basePath+"reasoning_content", newReasoningContent)
-			if err == nil {
-				modified = true
-			}
-		}
+		// 不再进行敏感词替换，只进行检测和拒绝
 
 		return true
 	})
@@ -94,19 +72,19 @@ func ProcessOpenAIRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginConte
 	return modified, denied
 }
 
-// processJSONPathRequest 处理 JSONPath 请求
-func ProcessJSONPathRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, body []byte) (bool, bool) {
-	// 简化实现：使用 gjson 解析 JSONPath
-	// 注意：这里需要完整的 JSONPath 实现
+// ProcessCustomJSONPathRequest 处理自定义 JSONPath 请求（新接口）
+func ProcessCustomJSONPathRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, body []byte, jsonPaths []string) (bool, bool) {
 	bodyStr := string(body)
 	modified := false
 	denied := false
-	for _, path := range pluginCtx.Config.DenyJSONPath {
+
+	for _, path := range jsonPaths {
 		result := gjson.Get(bodyStr, path)
 		if !result.Exists() {
 			continue
 		}
 		pluginCtx.RequestDenyModifyType = config.DenyModifyTypeJSONPath
+
 		// 1) 直接是字符串
 		if result.Type == gjson.String {
 			content := result.String()
@@ -114,14 +92,7 @@ func ProcessJSONPathRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginCon
 				denied = true
 				return modified, denied
 			}
-
-			newContent := ReplaceMessage(content, pluginCtx)
-			if newContent != content {
-				oldJson, _ := json.Marshal(content)
-				newJson, _ := json.Marshal(newContent)
-				bodyStr = strings.ReplaceAll(bodyStr, string(oldJson), string(newJson))
-				modified = true
-			}
+			// 不再进行敏感词替换，只进行检测和拒绝
 			continue
 		}
 
@@ -136,14 +107,7 @@ func ProcessJSONPathRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginCon
 					denied = true
 					return modified, denied
 				}
-
-				newContent := ReplaceMessage(content, pluginCtx)
-				if newContent != content {
-					oldJson, _ := json.Marshal(content)
-					newJson, _ := json.Marshal(newContent)
-					bodyStr = strings.ReplaceAll(bodyStr, string(oldJson), string(newJson))
-					modified = true
-				}
+				// 不再进行敏感词替换，只进行检测和拒绝
 			}
 		}
 	}
@@ -151,20 +115,45 @@ func ProcessJSONPathRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginCon
 	return modified, denied
 }
 
-// processRawRequest 处理原始请求，示例：
-func ProcessRawRequest(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, body []byte) (bool, bool) {
-	bodyStr := string(body)
+// ProcessCustomJSONPathResponse 处理自定义 JSONPath 响应（新接口）
+func ProcessCustomJSONPathResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, bodyStr string, jsonPaths []string) (bool, bool) {
 	modified := false
 	denied := false
 
-	if CheckMessage(bodyStr, pluginCtx.Config, config.SystemDenyWords, false) {
-		denied = true
-		return modified, denied
-	}
+	for _, path := range jsonPaths {
+		result := gjson.Get(bodyStr, path)
+		if !result.Exists() {
+			continue
+		}
+		pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeJSONPath
 
-	newBody := ReplaceMessage(bodyStr, pluginCtx)
-	if newBody != bodyStr {
-		modified = true
+		// 1) 直接是字符串
+		if result.Type == gjson.String {
+			content := result.String()
+			// 响应阶段不检测系统敏感词，只检测自定义敏感词
+			if CheckMessage(content, pluginCtx.Config, nil, false) {
+				denied = true
+				return modified, denied
+			}
+			// 不再进行敏感词替换，只进行检测和拒绝
+			continue
+		}
+
+		// 2) 是数组（例如 choices.#.message.content 等）
+		if result.IsArray() {
+			for _, item := range result.Array() {
+				if item.Type != gjson.String {
+					continue
+				}
+				content := item.String()
+				// 响应阶段不检测系统敏感词，只检测自定义敏感词
+				if CheckMessage(content, pluginCtx.Config, nil, false) {
+					denied = true
+					return modified, denied
+				}
+				// 不再进行敏感词替换，只进行检测和拒绝
+			}
+		}
 	}
 
 	return modified, denied
@@ -251,27 +240,6 @@ func ProcessOpenAIResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginCont
 	return modified, denied
 }
 
-// handleRawResponse 处理非 OpenAI 的原始响应体
-func ProcessRawResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, bodyStr string) types.Action {
-	// 命中敏感词直接拒绝（非流式响应）
-	// 系统敏感词只在请求阶段过滤，响应阶段不过滤系统敏感词
-	if CheckMessage(bodyStr, pluginCtx.Config, nil, false) {
-		wlog.LogWithLine("[%s] ProcessRawResponse: sensitive word detected, calling deny() - isStream=%v, isOpenAI=%v",
-			pluginName, pluginCtx.OpenAIRequest.Stream, pluginCtx.RequestDenyModifyType)
-		action := DenyHandler(ctx, pluginCtx)
-		wlog.LogWithLine("[%s] ProcessRawResponse: deny() returned action=%v", pluginName, action)
-		return action
-	}
-
-	// 还原脱敏数据
-	newBody := RestoreMessage(bodyStr, pluginCtx)
-	if newBody != bodyStr {
-		proxywasm.ReplaceHttpResponseBody([]byte(newBody))
-	}
-
-	return types.ActionContinue
-}
-
 // ProcessOpenAIStreamResponse 处理 OpenAI 流式 JSON 响应，使用滑动窗口缓冲区机制
 // 返回处理后的 chunk 和是否拒绝的标识
 func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, chunk []byte, isLastChunk bool) ([]byte, bool) {
@@ -284,12 +252,6 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 	if pluginCtx.StreamChunkBuffer == nil {
 		pluginCtx.StreamChunkBuffer = make([]config.StreamChunk, 0)
 		pluginCtx.StreamChunkBufferSize = 0
-	}
-
-	// 获取缓冲区大小
-	bufferSize := pluginCtx.Config.StreamBuffer
-	if bufferSize == 0 {
-		bufferSize = 1024 * 1024 // 默认 10*1024B
 	}
 
 	// 使用 wrapper.UnifySSEChunk 统一处理 SSE 格式
@@ -365,9 +327,9 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 					pluginCtx.StreamContentBuffer += contentDelta
 					newLen := len(pluginCtx.StreamContentBuffer)
 					// 限制缓冲区大小
-					if newLen > int(bufferSize) {
-						// 保留最新的 bufferSize 字节，滑动窗口
-						cutoff := newLen - int(bufferSize)
+					if newLen > int(pluginCtx.Config.MaxStreamChunkBufferLen) {
+						// 保留最新的 MaxStreamChunkBufferLen 字节，滑动窗口
+						cutoff := newLen - int(pluginCtx.Config.MaxStreamChunkBufferLen)
 						pluginCtx.StreamContentBuffer = pluginCtx.StreamContentBuffer[cutoff:]
 						// 调整所有 chunk 的 content 位置（优化：只调整受影响的 chunk）
 						for i := range pluginCtx.StreamChunkBuffer {
@@ -379,7 +341,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 								pluginCtx.StreamChunkBuffer[i].ContentEnd = 0
 							}
 						}
-						contentStart = newLen - int(bufferSize) - (oldLen - cutoff)
+						contentStart = newLen - int(pluginCtx.Config.MaxStreamChunkBufferLen) - (oldLen - cutoff)
 					}
 				}
 
@@ -388,9 +350,9 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 					pluginCtx.StreamReasoningBuffer += reasoningDelta
 					newLen := len(pluginCtx.StreamReasoningBuffer)
 					// 限制缓冲区大小
-					if newLen > int(bufferSize) {
-						// 保留最新的 bufferSize 字节，滑动窗口
-						cutoff := newLen - int(bufferSize)
+					if newLen > int(pluginCtx.Config.MaxStreamChunkBufferLen) {
+						// 保留最新的 MaxStreamChunkBufferLen 字节，滑动窗口
+						cutoff := newLen - int(pluginCtx.Config.MaxStreamChunkBufferLen)
 						pluginCtx.StreamReasoningBuffer = pluginCtx.StreamReasoningBuffer[cutoff:]
 						// 调整所有 chunk 的 reasoning 位置（优化：只调整受影响的 chunk）
 						for i := range pluginCtx.StreamChunkBuffer {
@@ -402,7 +364,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 								pluginCtx.StreamChunkBuffer[i].ReasoningEnd = 0
 							}
 						}
-						reasoningStart = newLen - int(bufferSize) - (oldLen - cutoff)
+						reasoningStart = newLen - int(pluginCtx.Config.MaxStreamChunkBufferLen) - (oldLen - cutoff)
 					}
 				}
 
@@ -426,7 +388,7 @@ func ProcessOpenAIStreamDenyResponse(ctx wrapper.HttpContext, pluginCtx *config.
 	}
 
 	// 检查是否需要处理缓冲区（缓冲区满或流结束）
-	shouldProcess := streamEnded || pluginCtx.StreamChunkBufferSize >= int(bufferSize)
+	shouldProcess := streamEnded || pluginCtx.StreamChunkBufferSize >= int(pluginCtx.Config.MaxStreamChunkBufferLen)
 
 	// 优化：即使缓冲区未满，也进行增量检测（检测新增部分）
 	// 这样可以更早发现敏感词，避免等待缓冲区满
@@ -599,7 +561,7 @@ func ProcessOpenAIStreamReplaceResponse(ctx wrapper.HttpContext, pluginCtx *conf
 	}
 
 	// 获取替换值
-	replaceValue := pluginCtx.Config.ResponseDenyPlot.Value
+	replaceValue := pluginCtx.Config.DenyPlot.Value
 	if replaceValue == "" {
 		replaceValue = "*" // 默认替换值
 	}
@@ -1423,7 +1385,7 @@ func DenyHandlerResponseReplaceNonStream(ctx wrapper.HttpContext, pluginCtx *con
 	// 设置标志，表示响应已被拒绝，跳过后续处理
 	ctx.SetUserAttribute("response_denied", "true")
 	// replace 策略：替换敏感词为 value，保持字符数相等
-	replaceValue := pluginCtx.Config.ResponseDenyPlot.Value
+	replaceValue := pluginCtx.Config.DenyPlot.Value
 	wlog.LogWithLine("[%s] processNonStreamResponse: using replace strategy, value=%s", pluginName, replaceValue)
 	// 如果存在用户属性，添加到响应头
 	if maskingAttr := ctx.GetUserAttribute("x-ai-data-masking"); maskingAttr != nil {

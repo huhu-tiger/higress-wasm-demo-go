@@ -3,7 +3,6 @@ package config
 import (
 	"bufio"
 	"io/fs"
-	"regexp"
 	"strings"
 )
 
@@ -30,36 +29,31 @@ const (
 
 // AiDataMaskingConfig 插件配置
 type AiDataMaskingConfig struct {
-	DenyOpenAI              bool             `json:"deny_openai"`
-	DenyRaw                 bool             `json:"deny_raw"`
-	DenyJSONPath            []string         `json:"deny_jsonpath"`
-	SystemDeny              bool             `json:"system_deny"`
-	DenyCode                uint32           `json:"deny_code"`
-	DenyMessage             string           `json:"deny_message"`
-	DenyRawMessage          string           `json:"deny_raw_message"`
-	DenyContentType         string           `json:"deny_content_type"`
-	DenyWords               []string         `json:"deny_words"`         // 敏感词列表
-	ResponseDenyPlot        ResponseDenyPlot `json:"response_deny_plot"` // 响应拒绝处理方式
-	ReplaceRoles            []Rule           `json:"replace_roles"`
-	StreamBuffer            uint32           `json:"stream_buffer"`
-	MaxBufferChunkCount     uint32           `json:"max_buffer_chunk_count"`      // 最长敏感词检测chunk个数
-	MaxStreamChunkBufferLen uint32           `json:"max_stream_chunk_buffer_len"` // 最长敏感词检测chunk大小
-	DenyPunctuation         []string         `json:"deny_punctuation"`            // 敏感词检测忽略的标点符号
+	SystemDeny              bool        `json:"system_deny"`                 // 开启内置拦截规则
+	DenyCode                uint32      `json:"deny_code"`                   // 拦截时http状态码
+	DenyContentType         string      `json:"deny_content_type"`           // 拦截时返回content_type头
+	DenyMessage             string      `json:"deny_message"`                // 拦截时ai返回消息
+	DenyWords               []string    `json:"deny_words"`                  // 自定义敏感词列表
+	DenyPlot                DenyPlot    `json:"deny_plot"`                   // 拒绝处理方式
+	RequestDeny             bool        `json:"request_deny"`                // 是否开启请求拦截
+	ResponseDeny            bool        `json:"response_deny"`               // 是否开启响应拦截
+	MatchFormat             MatchFormat `json:"match_format"`                // 匹配格式配置
+	MaxBufferChunkCount     uint32      `json:"max_buffer_chunk_count"`      // 最长敏感词检测chunk个数
+	MaxStreamChunkBufferLen uint32      `json:"max_stream_chunk_buffer_len"` // 最长敏感词检测chunk大小
+	DenyPunctuation         []string    `json:"deny_punctuation"`            // 敏感词检测忽略的标点符号
 }
 
-type ResponseDenyPlot struct {
-	Plot  string `json:"plot"`  // replace, stop,rollback 默认stop
-	Value string `json:"value"` // 如果是 replace，则替换为value，如果是stop，则返回deny_message
+// DenyPlot 拒绝处理方式
+type DenyPlot struct {
+	Plot  string `json:"plot"`  // replace, stop, rollback 默认stop
+	Value string `json:"value"` // 如果是 replace，则替换为value
 }
 
-// Rule 替换规则
-type Rule struct {
-	Regex   string `json:"regex"`
-	Type    string `json:"type"` // "replace" or "hash"
-	Restore bool   `json:"restore"`
-	Value   string `json:"value"`
-	// 编译后的正则表达式
-	CompiledRegex *regexp.Regexp
+// MatchFormat 匹配格式配置
+type MatchFormat struct {
+	Type                 string   `json:"type"`                   // 格式类型：custom, openai, anthropic
+	RequestDenyJSONPath  []string `json:"request_deny_jsonpath"`  // 请求拦截的 JSONPath（仅 type=custom 时有效）
+	ResponseDenyJSONPath []string `json:"response_deny_jsonpath"` // 响应拦截的 JSONPath（仅 type=custom 时有效）
 }
 
 // PluginContext 插件上下文（与配置解耦）

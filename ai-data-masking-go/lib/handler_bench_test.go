@@ -28,10 +28,9 @@ var (
 // createTestPluginContext 创建测试用的 PluginContext
 func createTestPluginContext() *config.PluginContext {
 	cfg := &config.AiDataMaskingConfig{
-		DenyWords:    testDenyWords,
-		SystemDeny:   true,
-		DenyMessage:  "检测到敏感词",
-		StreamBuffer: 10 * 1024, // 10KB
+		DenyWords:   testDenyWords,
+		SystemDeny:  true,
+		DenyMessage: "检测到敏感词",
 	}
 
 	return &config.PluginContext{
@@ -192,7 +191,6 @@ func BenchmarkStreamBuffer_SlidingWindow(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pluginCtx := createTestPluginContext()
-		pluginCtx.Config.StreamBuffer = bufferSize
 
 		// 模拟滑动窗口
 		for j := 0; j < 1000; j++ {

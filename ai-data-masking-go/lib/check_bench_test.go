@@ -53,10 +53,9 @@ func generateLongText(length int) string {
 // createTestConfig 创建测试配置
 func createTestConfig() *config.AiDataMaskingConfig {
 	return &config.AiDataMaskingConfig{
-		DenyWords:    testDenyWords,
-		SystemDeny:   true,
-		DenyMessage:  "检测到敏感词",
-		StreamBuffer: 10 * 1024, // 10KB
+		DenyWords:   testDenyWords,
+		SystemDeny:  true,
+		DenyMessage: "检测到敏感词",
 	}
 }
 

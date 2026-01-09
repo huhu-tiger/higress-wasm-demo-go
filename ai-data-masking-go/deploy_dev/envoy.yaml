@@ -47,24 +47,31 @@ static_resources:
                     "@type": "type.googleapis.com/google.protobuf.StringValue"
                     value: |
                       {
-                        "deny_openai": true,
-                        "deny_raw": false,
-                        "deny_jsonpath": [
-                          "prompt",
-                          "input.messages.#.content.0.text"
-                        ],
-                        "system_deny": true,
                         "deny_code": 403,
-                        "deny_message": "提问或回答中包含敏感词，已被屏蔽",
-                        "deny_raw_message": "{\"errmsg\":\"提问或回答中包含敏感词，已被屏蔽\"}",
                         "deny_content_type": "application/json",
+                        "deny_message": "提问或回答中包含敏感词，已被屏蔽",
+                        "system_deny": true,
                         "deny_words": [
                           "测试敏感词",
                           "宝塔",
                           "宋江",
                           "唐僧"
                         ],
-                        "deny_punctuation":[
+                        "deny_plot": {
+                          "plot": "replace",
+                          "value": "~~"
+                        },
+                        "request_deny": true,
+                        "response_deny": true,
+                        "match_format": {
+                          "type": "custom",
+                          "request_deny_jsonpath": [
+                            "$.prompt",
+                            "$.input.messages[*].content[*].text"
+                          ],
+                          "response_deny_jsonpath": []
+                        },
+                        "deny_punctuation": [
                           "。",
                           "！",
                           "？",
@@ -73,10 +80,8 @@ static_resources:
                           "：",
                           "；"
                         ],
-                        "deny_plot": {
-                          "plot":"replace",
-                          "value":"~~"
-                        }
+                        "max_buffer_chunk_count": 30,
+                        "max_stream_chunk_buffer_len": 2048
                       }
           - name: envoy.filters.http.router
             typed_config:

@@ -18,7 +18,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"ai-data-masking/config"
@@ -55,13 +54,7 @@ const (
 )
 
 func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
-	// 设置默认值
-	cfg.DenyOpenAI = json.Get("deny_openai").Bool()
-	if !json.Get("deny_openai").Exists() {
-		cfg.DenyOpenAI = true // 默认值
-	}
-
-	cfg.DenyRaw = json.Get("deny_raw").Bool()
+	// 解析基础配置
 	cfg.SystemDeny = json.Get("system_deny").Bool()
 
 	// 解析 deny_code
@@ -71,30 +64,16 @@ func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
 		cfg.DenyCode = 200 // 默认值
 	}
 
-	// 解析 deny_message
-	cfg.DenyMessage = json.Get("deny_message").String()
-	if cfg.DenyMessage == "" {
-		cfg.DenyMessage = "提问或回答中包含敏感词，已被屏蔽"
-	}
-
-	// 解析 deny_raw_message
-	cfg.DenyRawMessage = json.Get("deny_raw_message").String()
-	if cfg.DenyRawMessage == "" {
-		cfg.DenyRawMessage = `{"errmsg":"提问或回答中包含敏感词，已被屏蔽"}`
-	}
-
 	// 解析 deny_content_type
 	cfg.DenyContentType = json.Get("deny_content_type").String()
 	if cfg.DenyContentType == "" {
 		cfg.DenyContentType = "application/json"
 	}
 
-	// 解析 deny_jsonpath
-	for _, item := range json.Get("deny_jsonpath").Array() {
-		path := item.String()
-		if path != "" {
-			cfg.DenyJSONPath = append(cfg.DenyJSONPath, path)
-		}
+	// 解析 deny_message
+	cfg.DenyMessage = json.Get("deny_message").String()
+	if cfg.DenyMessage == "" {
+		cfg.DenyMessage = "提问或回答中包含敏感词，已被屏蔽"
 	}
 
 	// 解析 deny_words
@@ -105,38 +84,51 @@ func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
 		}
 	}
 
-	// 解析 replace_roles
-	for _, item := range json.Get("replace_roles").Array() {
-		rule := config.Rule{
-			Regex:   item.Get("regex").String(),
-			Type:    item.Get("type").String(),
-			Restore: item.Get("restore").Bool(),
-			Value:   item.Get("value").String(),
-		}
-
-		// 编译正则表达式（支持 GROK 模式）
-		if rule.Regex != "" {
-			pattern := convertGrokToRegex(rule.Regex)
-			compiled, err := regexp.Compile(pattern)
-			if err != nil {
-				proxywasm.LogWarnf("failed to compile regex %s: %v", rule.Regex, err)
-				continue
-			}
-			rule.CompiledRegex = compiled
-		}
-
-		cfg.ReplaceRoles = append(cfg.ReplaceRoles, rule)
-	}
-
 	// 解析 deny_plot
 	denyPlotJson := json.Get("deny_plot")
-	if denyPlotJson.Exists() {
-		cfg.ResponseDenyPlot.Plot = denyPlotJson.Get("plot").String()
-		if cfg.ResponseDenyPlot.Plot == "" {
-			cfg.ResponseDenyPlot.Plot = "stop" // 默认值
-		}
-		cfg.ResponseDenyPlot.Value = denyPlotJson.Get("value").String()
+	cfg.DenyPlot.Plot = denyPlotJson.Get("plot").String()
+	if cfg.DenyPlot.Plot == "" {
+		cfg.DenyPlot.Plot = "stop" // 默认值
 	}
+	cfg.DenyPlot.Value = denyPlotJson.Get("value").String()
+
+	// 解析 request_deny
+	if json.Get("request_deny").Exists() {
+		cfg.RequestDeny = json.Get("request_deny").Bool()
+	} else {
+		cfg.RequestDeny = true // 默认开启请求拦截
+	}
+
+	// 解析 response_deny
+	if json.Get("response_deny").Exists() {
+		cfg.ResponseDeny = json.Get("response_deny").Bool()
+	} else {
+		cfg.ResponseDeny = true // 默认开启响应拦截
+	}
+
+	// 解析 match_format
+	matchFormatJson := json.Get("match_format")
+	cfg.MatchFormat.Type = matchFormatJson.Get("type").String()
+	if cfg.MatchFormat.Type == "" {
+		cfg.MatchFormat.Type = "openai" // 默认值
+	}
+
+	// 解析 request_deny_jsonpath
+	for _, item := range matchFormatJson.Get("request_deny_jsonpath").Array() {
+		path := item.String()
+		if path != "" {
+			cfg.MatchFormat.RequestDenyJSONPath = append(cfg.MatchFormat.RequestDenyJSONPath, path)
+		}
+	}
+
+	// 解析 response_deny_jsonpath
+	for _, item := range matchFormatJson.Get("response_deny_jsonpath").Array() {
+		path := item.String()
+		if path != "" {
+			cfg.MatchFormat.ResponseDenyJSONPath = append(cfg.MatchFormat.ResponseDenyJSONPath, path)
+		}
+	}
+
 	if cfg.SystemDeny {
 		// 从资源文件加载系统敏感词
 		systemWords, err := config.LoadSystemDenyWords(resourcesFS)
@@ -174,34 +166,6 @@ func parseConfig(json gjson.Result, cfg *config.AiDataMaskingConfig) error {
 	wlog.LogWithLine("[%s] 最长返回敏感词检测chunk大小: %d", pluginName, cfg.MaxStreamChunkBufferLen)
 
 	return nil
-}
-
-// convertGrokToRegex 将 GROK 模式转换为正则表达式（简化版）
-func convertGrokToRegex(grokPattern string) string {
-	// 这里实现 GROK 到正则的转换
-	// 简化实现，支持常见的 GROK 模式
-	patterns := map[string]string{
-		"%{MOBILE}":                            `\d{8,11}`,
-		"%{IDCARD}":                            `\d{17}[0-9xX]|\d{15}`,
-		"%{IP}":                                `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`,
-		"%{EMAILLOCALPART}":                    `[a-zA-Z0-9._%+-]+`,
-		"%{HOSTNAME:domain}":                   `([a-zA-Z0-9.-]+)`,
-		"%{EMAILLOCALPART}@%{HOSTNAME:domain}": `[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+)`,
-	}
-
-	// 检查是否有预定义的模式
-	if pattern, ok := patterns[grokPattern]; ok {
-		return pattern
-	}
-
-	// 简单的 GROK 模式替换
-	result := grokPattern
-	for grok, regex := range patterns {
-		result = strings.ReplaceAll(result, grok, regex)
-	}
-
-	// 如果没有匹配，返回原始字符串（可能是标准正则）
-	return result
 }
 
 // getOrCreatePluginContext 获取或创建插件上下文
@@ -253,79 +217,68 @@ func onHttpRequestBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, 
 	pluginCtx.Step = config.StepRequestBody
 	wlog.LogWithLine("[%s] Process Step: %s", pluginName, pluginCtx.Step.String())
 	ctx.SetRequestBodyBufferLimit(config.DEFAULT_MAX_BODY_BYTES)
-	// 如果配置了OpenAI拒绝，则处理OpenAI请求
-	if cfg.DenyOpenAI {
-		var modified bool
-		var denied bool
-		// 请求体阶段处理OpenAI请求
+
+	// 检查是否开启请求拦截
+	if !cfg.RequestDeny {
+		wlog.LogWithLine("[%s] Request deny is disabled, skipping request body processing", pluginName)
+		return types.ActionContinue
+	}
+
+	// 根据 match_format.type 处理不同格式的请求
+	var modified bool
+	var denied bool
+
+	switch cfg.MatchFormat.Type {
+	case "openai":
+		// 处理 OpenAI 格式
 		modified, denied = lib.ProcessOpenAIRequest(ctx, pluginCtx, body)
-		// 如果匹配到敏感词
 		if denied {
-			pluginCtx.IsDeny = true
-			pluginCtx.IsRequestDeny = true
 			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
-			ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.RequestDenyModifyType))
-			ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
-			ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", cfg.DenyCode))
-
-			// 设置标志，表示响应已在请求阶段发送，响应阶段的回调应该跳过处理
-			ctx.SetUserAttribute("response_sent_in_request", "true")
-
-			var openaiResponseJson []byte
-			// 根据是否为流式请求构造不同的响应格式
-			if pluginCtx.OpenAIRequest.Stream {
-				// 流式响应：使用 SSE 格式
-				streamResponse := config.OpenAIStreamCompletionResponse{
-					Id:      uuid.New().String(),
-					Object:  "chat.completion.chunk",
-					Created: 123,
-					Model:   pluginCtx.OpenAIRequest.Model,
-					Choices: []config.OpenAIStreamChoice{
-						{
-							Index: 0,
-							Delta: &config.OpenAIMessage{
-								Role:    "assistant",
-								Content: cfg.DenyMessage,
-							},
-							FinishReason: config.FINISH_REASON_STOP,
-						},
-					},
-				}
-				streamJson, _ := json.Marshal(streamResponse)
-				// SSE 格式：data: {...}\n\ndata:[DONE]\n\n
-				openaiResponseJson = []byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", string(streamJson)))
-			} else {
-				// 非流式响应
-				openaiResponse := config.OpenAICompletionResponse{
-					Id:      uuid.New().String(),
-					Object:  "chat.completion",
-					Created: 123,
-					Model:   pluginCtx.OpenAIRequest.Model,
-					Choices: []config.OpenAICompletionChoice{
-						{
-							Index: 0,
-							Message: &config.OpenAIMessage{
-								Role:    "assistant",
-								Content: cfg.DenyMessage,
-							},
-						},
-					},
-					Usage: &config.OpenAIUsage{
-						PromptTokens:     0,
-						CompletionTokens: 0,
-						TotalTokens:      0,
-					},
-				}
-				openaiResponseJson, _ = json.Marshal(openaiResponse) // []byte
-			}
-			ctx.SetUserAttribute("deny_message", openaiResponseJson)
-			wlog.LogWithLine("[%s] onHttpRequestBody: pluginCtx.OpenAIRequest.Model=%s", pluginName, pluginCtx.OpenAIRequest.Model)
-			wlog.LogWithLine("[%s] onHttpRequestBody DenyModifyType:%s Stream:%v deny() called: deny_message=%s",
-				pluginName, pluginCtx.RequestDenyModifyType, pluginCtx.OpenAIRequest.Stream, cfg.DenyMessage)
-
-			return lib.DenyHandler(ctx, pluginCtx)
+			return handleRequestDeny(ctx, pluginCtx, &cfg)
+		}
+		if modified {
+			pluginCtx.IsModified = true
+			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
+			proxywasm.ReplaceHttpRequestBody(body)
 		}
 
+	case "anthropic":
+		// TODO: 处理 Anthropic 格式（暂时使用 OpenAI 格式处理）
+		wlog.LogWithLine("[%s] Anthropic format not fully implemented, using OpenAI format", pluginName)
+		modified, denied = lib.ProcessOpenAIRequest(ctx, pluginCtx, body)
+		if denied {
+			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
+			return handleRequestDeny(ctx, pluginCtx, &cfg)
+		}
+		if modified {
+			pluginCtx.IsModified = true
+			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
+			proxywasm.ReplaceHttpRequestBody(body)
+		}
+
+	case "custom":
+		// 自定义格式：根据 request_deny_jsonpath 处理
+		if len(cfg.MatchFormat.RequestDenyJSONPath) > 0 {
+			// 使用自定义的 JSONPath 进行处理
+			modified, denied = lib.ProcessCustomJSONPathRequest(ctx, pluginCtx, body, cfg.MatchFormat.RequestDenyJSONPath)
+			if denied {
+				pluginCtx.RequestDenyModifyType = config.DenyModifyTypeJSONPath
+				return handleRequestDeny(ctx, pluginCtx, &cfg)
+			}
+			if modified {
+				pluginCtx.IsModified = true
+				pluginCtx.RequestDenyModifyType = config.DenyModifyTypeJSONPath
+				proxywasm.ReplaceHttpRequestBody(body)
+			}
+		}
+
+	default:
+		wlog.LogWithLine("[%s] Unknown match_format.type: %s, using openai as default", pluginName, cfg.MatchFormat.Type)
+		modified, denied = lib.ProcessOpenAIRequest(ctx, pluginCtx, body)
+		if denied {
+			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
+			return handleRequestDeny(ctx, pluginCtx, &cfg)
+		}
 		if modified {
 			pluginCtx.IsModified = true
 			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeOpenAI
@@ -333,72 +286,92 @@ func onHttpRequestBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, 
 		}
 	}
 
-	// 如果配置了JSONPath拒绝，则处理JSONPath请求
-	if len(cfg.DenyJSONPath) > 0 {
-		var modified bool
-		var denied bool
-
-		modified, denied = lib.ProcessJSONPathRequest(ctx, pluginCtx, body)
-		if denied {
-			pluginCtx.IsDeny = true
-			pluginCtx.IsRequestDeny = true
-			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeJSONPath
-
-			ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.RequestDenyModifyType))
-			ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
-			ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", cfg.DenyCode))
-
-			jsonPathResponse := config.JSONPathResponse{
-				Code:    cfg.DenyCode,
-				Message: cfg.DenyMessage,
-				Data:    map[string]interface{}{},
-			}
-			jsonPathResponseJson, _ := json.Marshal(jsonPathResponse)
-			ctx.SetUserAttribute("deny_message", []byte(jsonPathResponseJson))
-			// 设置标志，表示响应已在请求阶段发送，响应阶段的回调应该跳过处理
-			ctx.SetUserAttribute("response_sent_in_request", "true")
-			wlog.LogWithLine("[%s] onHttpRequestBody JSONPath:%b deny() called: deny_message=%s", pluginName, pluginCtx.RequestDenyModifyType, cfg.DenyMessage)
-
-			return lib.DenyHandler(ctx, pluginCtx)
-		}
-		if modified {
-			pluginCtx.IsModified = true
-			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeJSONPath
-			proxywasm.ReplaceHttpRequestBody(body)
-		}
-	}
-	// 如果配置了Raw拒绝，则处理Raw请求
-	if cfg.DenyRaw {
-		var modified bool
-		var denied bool
-		modified, denied = lib.ProcessRawRequest(ctx, pluginCtx, body)
-		if denied {
-			pluginCtx.IsDeny = true
-			pluginCtx.IsRequestDeny = true
-			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeRaw
-			ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.RequestDenyModifyType))
-			ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
-			ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", cfg.DenyCode))
-			rawResponse := config.RawResponse{
-				Code:    cfg.DenyCode,
-				Message: cfg.DenyMessage,
-				Data:    map[string]interface{}{},
-			}
-			rawResponseJson, _ := json.Marshal(rawResponse)
-			ctx.SetUserAttribute("deny_message", []byte(rawResponseJson))
-			// 设置标志，表示响应已在请求阶段发送，响应阶段的回调应该跳过处理
-			ctx.SetUserAttribute("response_sent_in_request", "true")
-			wlog.LogWithLine("[%s] onHttpRequestBody Raw:%b deny() called: deny_message=%s", pluginName, pluginCtx.RequestDenyModifyType, cfg.DenyMessage)
-			return lib.DenyHandler(ctx, pluginCtx)
-		}
-		if modified {
-			pluginCtx.IsModified = true
-			pluginCtx.RequestDenyModifyType = config.DenyModifyTypeRaw
-			proxywasm.ReplaceHttpRequestBody(body)
-		}
-	}
-	// 同步处理完成，继续传递请求到下游
 	return types.ActionContinue
+}
+
+// handleRequestDeny 处理请求阶段的拒绝
+func handleRequestDeny(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, cfg *config.AiDataMaskingConfig) types.Action {
+	pluginCtx.IsDeny = true
+	pluginCtx.IsRequestDeny = true
+
+	ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.RequestDenyModifyType))
+	ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
+	ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", cfg.DenyCode))
+	ctx.SetUserAttribute("response_sent_in_request", "true")
+
+	var denyMessageBytes []byte
+
+	switch pluginCtx.RequestDenyModifyType {
+	case config.DenyModifyTypeOpenAI:
+		// 根据是否为流式请求构造不同的响应格式
+		if pluginCtx.OpenAIRequest != nil && pluginCtx.OpenAIRequest.Stream {
+			// 流式响应：使用 SSE 格式
+			streamResponse := config.OpenAIStreamCompletionResponse{
+				Id:      uuid.New().String(),
+				Object:  "chat.completion.chunk",
+				Created: 123,
+				Model:   pluginCtx.OpenAIRequest.Model,
+				Choices: []config.OpenAIStreamChoice{
+					{
+						Index: 0,
+						Delta: &config.OpenAIMessage{
+							Role:    "assistant",
+							Content: cfg.DenyMessage,
+						},
+						FinishReason: config.FINISH_REASON_STOP,
+					},
+				},
+			}
+			streamJson, _ := json.Marshal(streamResponse)
+			denyMessageBytes = []byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", string(streamJson)))
+		} else {
+			// 非流式响应
+			openaiResponse := config.OpenAICompletionResponse{
+				Id:      uuid.New().String(),
+				Object:  "chat.completion",
+				Created: 123,
+				Model: func() string {
+					if pluginCtx.OpenAIRequest != nil {
+						return pluginCtx.OpenAIRequest.Model
+					}
+					return "unknown"
+				}(),
+				Choices: []config.OpenAICompletionChoice{
+					{
+						Index: 0,
+						Message: &config.OpenAIMessage{
+							Role:    "assistant",
+							Content: cfg.DenyMessage,
+						},
+					},
+				},
+				Usage: &config.OpenAIUsage{
+					PromptTokens:     0,
+					CompletionTokens: 0,
+					TotalTokens:      0,
+				},
+			}
+			denyMessageBytes, _ = json.Marshal(openaiResponse)
+		}
+
+	case config.DenyModifyTypeJSONPath:
+		jsonPathResponse := config.JSONPathResponse{
+			Code:    cfg.DenyCode,
+			Message: cfg.DenyMessage,
+			Data:    map[string]interface{}{},
+		}
+		denyMessageBytes, _ = json.Marshal(jsonPathResponse)
+
+	default:
+		denyMessageBytes = []byte(cfg.DenyMessage)
+	}
+
+	ctx.SetUserAttribute("deny_message", denyMessageBytes)
+
+	wlog.LogWithLine("[%s] onHttpRequestBody DenyModifyType:%s deny() called: deny_message=%s",
+		pluginName, pluginCtx.RequestDenyModifyType, cfg.DenyMessage)
+
+	return lib.DenyHandler(ctx, pluginCtx)
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig) types.Action {
@@ -455,6 +428,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig,
 	pluginCtx.Step = config.StepRespBody
 	ctx.SetResponseBodyBufferLimit(config.DEFAULT_MAX_BODY_BYTES)
 	wlog.LogWithLine("[%s] Process Step: %s", pluginName, pluginCtx.Step.String())
+
 	// 检查响应是否来自上游（如果是在请求阶段通过 SendHttpResponse 发送的，则不是来自上游）
 	if !wrapper.IsResponseFromUpstream() {
 		// 响应不是来自上游（可能是我们在请求阶段发送的），直接跳过处理
@@ -468,6 +442,12 @@ func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig,
 		return types.ActionContinue
 	}
 
+	// 检查是否开启响应拦截
+	if !cfg.ResponseDeny {
+		wlog.LogWithLine("[%s] Response deny is disabled, skipping response body processing", pluginName)
+		return types.ActionContinue
+	}
+
 	return processNonStreamResponse(ctx, cfg, body)
 }
 
@@ -475,93 +455,153 @@ func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig,
 func processNonStreamResponse(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, body []byte) types.Action {
 	pluginCtx := getOrCreatePluginContext(ctx, &cfg)
 	bodyStr := string(body)
-	wlog.LogWithLine("[%s] processNonStreamResponse: body length=%d, RequestDenyType=%v, RespIsSSE=%v, DenyOpenAI=%v, DenyRaw=%v",
-		pluginName, len(body), pluginCtx.RequestDenyModifyType, pluginCtx.RespIsSSE, pluginCtx.Config.DenyOpenAI, pluginCtx.Config.DenyRaw)
+	wlog.LogWithLine("[%s] processNonStreamResponse: body length=%d, MatchFormat.Type=%v, RespIsSSE=%v",
+		pluginName, len(body), pluginCtx.Config.MatchFormat.Type, pluginCtx.RespIsSSE)
 
-	// 先处理 OpenAI JSON 响应（如果启用）,并且请求阶段是openai格式
-	if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
-		wlog.LogWithLine("[%s] processNonStreamResponse: processing OpenAI response", pluginName)
-		modified, denied := lib.ProcessOpenAIResponse(ctx, pluginCtx, bodyStr, body)
+	var modified, denied bool
 
-		if denied {
-			// 根据拒绝策略处理
-			denyPlot := pluginCtx.Config.ResponseDenyPlot.Plot
-			if denyPlot == "" {
-				denyPlot = "stop" // 默认值
-			}
-			// 先设置 ResponseDenyModifyType，然后再设置属性
-			pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
-			pluginCtx.IsDeny = true
-			pluginCtx.IsResponseDeny = true
+	// 根据 match_format.type 处理不同格式的响应
+	switch cfg.MatchFormat.Type {
+	case "openai":
+		// 处理 OpenAI 格式响应
+		if pluginCtx.OpenAIRequest != nil {
+			wlog.LogWithLine("[%s] processNonStreamResponse: processing OpenAI response", pluginName)
+			modified, denied = lib.ProcessOpenAIResponse(ctx, pluginCtx, bodyStr, body)
 
-			// 设置用户属性（必须在设置 ResponseDenyModifyType 之后）
-			ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.ResponseDenyModifyType))
-			ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
-			ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", pluginCtx.Config.DenyCode))
-			ctx.SetUserAttribute("deny_plot", denyPlot)
-
-			if denyPlot == "replace" {
-				wlog.LogWithLine("[%s] processNonStreamResponse: replaced sensitive words with value, continuing", pluginName)
-				return lib.DenyHandlerResponseReplaceNonStream(ctx, pluginCtx, bodyStr)
-			}
-
-			// stop 策略：返回拒绝消息（默认行为，或 replace 策略解析失败时）
-			if denyPlot != "replace" {
-				// 设置 deny 相关标志和属性
-				pluginCtx.IsDeny = true
-				pluginCtx.IsResponseDeny = true
+			if denied {
 				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
-
-				// stop 策略：返回拒绝消息（默认行为）
-				openaiResponse := config.OpenAICompletionResponse{
-					Id:      uuid.New().String(),
-					Object:  "chat.completion",
-					Created: 123,
-					Model:   pluginCtx.OpenAIRequest.Model,
-					Choices: []config.OpenAICompletionChoice{
-						{
-							Index: 0,
-							Message: &config.OpenAIMessage{
-								Role:    "assistant",
-								Content: cfg.DenyMessage,
-							},
-						},
-					},
-					Usage: &config.OpenAIUsage{
-						PromptTokens:     0,
-						CompletionTokens: 0,
-						TotalTokens:      0,
-					},
-				}
-				openaiResponseJson, _ := json.Marshal(openaiResponse)
-				ctx.SetUserAttribute("deny_message", openaiResponseJson)
-
-				wlog.LogWithLine("[%s] processNonStreamResponse: OpenAI Response Denied (stop strategy), denied=%v", pluginName, denied)
-
-				return lib.DenyHandler(ctx, pluginCtx)
+				return handleResponseDenyNonStream(ctx, pluginCtx, &cfg, bodyStr)
+			}
+			if modified {
+				pluginCtx.IsModified = true
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
+				proxywasm.ReplaceHttpResponseBody(body)
 			}
 		}
-		if modified {
-			pluginCtx.IsModified = true
-			pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
 
-			proxywasm.ReplaceHttpResponseBody(body)
+	case "anthropic":
+		// TODO: 处理 Anthropic 格式响应（暂时使用 OpenAI 格式处理）
+		wlog.LogWithLine("[%s] Anthropic format not fully implemented, using OpenAI format", pluginName)
+		if pluginCtx.OpenAIRequest != nil {
+			modified, denied = lib.ProcessOpenAIResponse(ctx, pluginCtx, bodyStr, body)
+
+			if denied {
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
+				return handleResponseDenyNonStream(ctx, pluginCtx, &cfg, bodyStr)
+			}
+			if modified {
+				pluginCtx.IsModified = true
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
+				proxywasm.ReplaceHttpResponseBody(body)
+			}
+		}
+
+	case "custom":
+		// 自定义格式：根据 response_deny_jsonpath 处理
+		if len(cfg.MatchFormat.ResponseDenyJSONPath) > 0 {
+			// 使用自定义的 JSONPath 进行处理
+			modified, denied = lib.ProcessCustomJSONPathResponse(ctx, pluginCtx, bodyStr, cfg.MatchFormat.ResponseDenyJSONPath)
+
+			if denied {
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeJSONPath
+				return handleResponseDenyNonStream(ctx, pluginCtx, &cfg, bodyStr)
+			}
+			if modified {
+				pluginCtx.IsModified = true
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeJSONPath
+				proxywasm.ReplaceHttpResponseBody(body)
+			}
+		}
+
+	default:
+		wlog.LogWithLine("[%s] Unknown match_format.type: %s, using openai as default", pluginName, cfg.MatchFormat.Type)
+		if pluginCtx.OpenAIRequest != nil {
+			modified, denied = lib.ProcessOpenAIResponse(ctx, pluginCtx, bodyStr, body)
+
+			if denied {
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
+				return handleResponseDenyNonStream(ctx, pluginCtx, &cfg, bodyStr)
+			}
+			if modified {
+				pluginCtx.IsModified = true
+				pluginCtx.ResponseDenyModifyType = config.DenyModifyTypeOpenAI
+				proxywasm.ReplaceHttpResponseBody(body)
+			}
 		}
 	}
 
-	// // 再处理 Raw 响应体（如果启用）
-	// if pluginCtx.Config.DenyRaw {
-	// 	wlog.LogWithLine("[%s] processNonStreamResponse: processing Raw response", pluginName)
-	// 	action := lib.ProcessRawResponse(ctx, pluginCtx, bodyStr)
-	// 	if action != types.ActionContinue {
-	// 		wlog.LogWithLine("[%s] processNonStreamResponse: Raw Response Denied, action=%v", pluginName, action)
-	// 		return action
-	// 	}
-	// 	wlog.LogWithLine("[%s] processNonStreamResponse: Raw response processed, continuing", pluginName)
-	// }
-
-	// wlog.LogWithLine("[%s] processNonStreamResponse: all checks passed, returning ActionContinue", pluginName)
+	wlog.LogWithLine("[%s] processNonStreamResponse: all checks passed, returning ActionContinue", pluginName)
 	return types.ActionContinue
+}
+
+// handleResponseDenyNonStream 处理非流式响应的拒绝
+func handleResponseDenyNonStream(ctx wrapper.HttpContext, pluginCtx *config.PluginContext, cfg *config.AiDataMaskingConfig, bodyStr string) types.Action {
+	// 根据拒绝策略处理
+	denyPlot := cfg.DenyPlot.Plot
+	if denyPlot == "" {
+		denyPlot = "stop" // 默认值
+	}
+
+	// 设置 deny 相关标志和属性
+	pluginCtx.IsDeny = true
+	pluginCtx.IsResponseDeny = true
+
+	ctx.SetUserAttribute("x-ai-data-masking", string(pluginCtx.ResponseDenyModifyType))
+	ctx.SetUserAttribute("deny_step", pluginCtx.Step.String())
+	ctx.SetUserAttribute("deny_code", fmt.Sprintf("%d", cfg.DenyCode))
+	ctx.SetUserAttribute("deny_plot", denyPlot)
+
+	if denyPlot == "replace" {
+		wlog.LogWithLine("[%s] handleResponseDenyNonStream: replaced sensitive words with value, continuing", pluginName)
+		return lib.DenyHandlerResponseReplaceNonStream(ctx, pluginCtx, bodyStr)
+	}
+
+	// stop 策略：返回拒绝消息（默认行为）
+	switch pluginCtx.ResponseDenyModifyType {
+	case config.DenyModifyTypeOpenAI:
+		openaiResponse := config.OpenAICompletionResponse{
+			Id:      uuid.New().String(),
+			Object:  "chat.completion",
+			Created: 123,
+			Model: func() string {
+				if pluginCtx.OpenAIRequest != nil {
+					return pluginCtx.OpenAIRequest.Model
+				}
+				return "unknown"
+			}(),
+			Choices: []config.OpenAICompletionChoice{
+				{
+					Index: 0,
+					Message: &config.OpenAIMessage{
+						Role:    "assistant",
+						Content: cfg.DenyMessage,
+					},
+				},
+			},
+			Usage: &config.OpenAIUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+		}
+		openaiResponseJson, _ := json.Marshal(openaiResponse)
+		ctx.SetUserAttribute("deny_message", openaiResponseJson)
+
+	case config.DenyModifyTypeJSONPath:
+		jsonPathResponse := config.JSONPathResponse{
+			Code:    cfg.DenyCode,
+			Message: cfg.DenyMessage,
+			Data:    map[string]interface{}{},
+		}
+		jsonPathResponseJson, _ := json.Marshal(jsonPathResponse)
+		ctx.SetUserAttribute("deny_message", jsonPathResponseJson)
+
+	default:
+		ctx.SetUserAttribute("deny_message", []byte(cfg.DenyMessage))
+	}
+
+	wlog.LogWithLine("[%s] handleResponseDenyNonStream: Response Denied (stop strategy)", pluginName)
+	return lib.DenyHandler(ctx, pluginCtx)
 }
 
 func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaskingConfig, chunk []byte, isLastChunk bool) []byte {
@@ -569,12 +609,21 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 	pluginCtx.Step = config.StepStreamRespBody
 	// wlog.LogWithLine("[%s] Process Step: %s", pluginName, pluginCtx.Step.String())
 
+	// 检查是否开启响应拦截
+	if !cfg.ResponseDeny {
+		// wlog.LogWithLine("[%s] Response deny is disabled, skipping streaming response body processing", pluginName)
+		return chunk
+	}
+
 	// 根据拒绝策略处理
-	denyPlot := pluginCtx.Config.ResponseDenyPlot.Plot
+	denyPlot := cfg.DenyPlot.Plot
 	if denyPlot == "" {
 		denyPlot = "stop" // 默认值
 	}
-	if denyPlot == "rollback" && pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
+	if denyPlot == "" {
+		denyPlot = "stop" // 默认值
+	}
+	if denyPlot == "rollback" && (cfg.MatchFormat.Type == "openai" || cfg.MatchFormat.Type == "anthropic") && pluginCtx.OpenAIRequest != nil {
 		processedChunk := lib.ProcessOpenAIStreamRollbackResponse(ctx, pluginCtx, chunk, isLastChunk)
 		if processedChunk != nil {
 			wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI rollback response, chunk:%s, processedChunk:%s",
@@ -584,13 +633,11 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 		return chunk
 	}
 
-	if denyPlot == "replace" && pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
-		if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
-			processedChunk := lib.ProcessOpenAIStreamReplaceResponse(ctx, pluginCtx, chunk, isLastChunk)
-			wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response, chunk:%s, processedChunk:%s",
-				pluginName, string(chunk), string(processedChunk))
-			return processedChunk
-		}
+	if denyPlot == "replace" && (cfg.MatchFormat.Type == "openai" || cfg.MatchFormat.Type == "anthropic") && pluginCtx.OpenAIRequest != nil {
+		processedChunk := lib.ProcessOpenAIStreamReplaceResponse(ctx, pluginCtx, chunk, isLastChunk)
+		wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response, chunk:%s, processedChunk:%s",
+			pluginName, string(chunk), string(processedChunk))
+		return processedChunk
 	}
 
 	if denyPlot == "stop" {
@@ -605,8 +652,8 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 			return nil
 		}
 
-		// 先处理 OpenAI JSON 响应（如果启用）,并且请求阶段是openai格式
-		if pluginCtx.Config.DenyOpenAI && pluginCtx.OpenAIRequest != nil {
+		// 处理 OpenAI/Anthropic 格式的流式响应
+		if (cfg.MatchFormat.Type == "openai" || cfg.MatchFormat.Type == "anthropic") && pluginCtx.OpenAIRequest != nil {
 			processedChunk, denied := lib.ProcessOpenAIStreamDenyResponse(ctx, pluginCtx, chunk, isLastChunk)
 			if denied {
 				// 检测到敏感词，标记为拒绝并返回截断的响应
@@ -618,8 +665,6 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, cfg config.AiDataMaski
 					wlog.LogWithLine("[%s] onHttpStreamingResponseBody: processing OpenAI response,  processedChunk=%s", pluginName, string(processedChunk))
 					return processedChunk
 				}
-				// // 如果没有返回chunk，返回 [DONE] 结束流
-				// return []byte("data: [DONE]\n\n")
 			}
 			// 没有 deny，返回处理后的 chunk（可能是原样或修改后的）
 			if processedChunk != nil {

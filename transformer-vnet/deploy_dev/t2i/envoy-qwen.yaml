@@ -1,0 +1,75 @@
+admin:
+  address:
+    socket_address:
+      protocol: TCP
+      address: 0.0.0.0
+      port_value: 9901
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address:
+        protocol: TCP
+        address: 0.0.0.0
+        port_value: 10000
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          scheme_header_transformation:
+            scheme_to_overwrite: https
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: qwen_image_generation
+                  prefix_rewrite: "/api/v1/services/aigc/multimodal-generation/generation"
+                  timeout: 300s  # 文生图可能需要较长时间，设置为 5 分钟
+          http_filters:
+          # transformer-vnet 插件 - 根据请求头中的 model 和 model_type 自动转换格式
+          # qwen-image-plus 使用统一格式，无需转换
+          - name: transformer-vnet
+            typed_config:
+              "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+              type_url: type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+              value:
+                config:
+                  name: transformer-vnet
+                  vm_config:
+                    runtime: envoy.wasm.runtime.v8
+                    code:
+                      local:
+                        filename: /etc/envoy/main.wasm
+                  configuration:
+                    "@type": "type.googleapis.com/google.protobuf.StringValue"
+                    # transformer-vnet 插件配置
+                    # 转换逻辑由代码自动处理，根据请求头中的 model 和 model_type 进行转换
+                    # 支持的模型：
+                    #   - aliyun/aliyun/qwen-image-plus (model_type: t2i) - 使用统一格式，无需转换
+                    value: |
+                      {}
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: qwen_image_generation
+    connect_timeout: 30s
+    type: LOGICAL_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: qwen_image_generation
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 220.181.114.184
+                port_value: 30951

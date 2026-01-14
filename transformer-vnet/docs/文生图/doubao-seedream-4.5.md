@@ -147,7 +147,7 @@
     "created": 1768313092,
     "data": [
         {
-            "b64_json": "https://example.com/images/doubao-seedream-4-5/example-image.jpeg",
+            "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
             "size": "2048x2048"
         }
     ],

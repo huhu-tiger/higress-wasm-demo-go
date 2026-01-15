@@ -23,3 +23,5 @@ t2i 代表文生图， i2i 代表图生图
 - [X] 对请求的size参数进行统一处理，使用qwen的方式统一方式传入，豆包的2K,4K等参数 使用value映射
 - [X] 增加对transformer-vnet/docs/文生图/qwen-image.md 统一请求与响应的支持，header的model与model_type参考Qwen文档
 - [X] 加入 transformer-vnet/docs/文生图/gemini-3-image.md  统一请求与响应的支持，header的model与model_type参考Qwen文档
+- [X] 编写接口使用说明文档 docs/api.md, 文档要求  按照文生图 一级分类，二级是各个模型， 每个模型 有统一请求参数，统一响应参数，原始请求 和 原始响应的说明，以及参数对应关系
+- [X] 在test/t2i目录下创建测试脚本，读取makefile中不同模型的启动方式，测试三种t2i模型，需要切换deploy_dev中的不同的envoy.yml 配置文件

@@ -9,3 +9,4 @@ pkg
 **/*.wasm
 extensions
 __pycache__
+.env

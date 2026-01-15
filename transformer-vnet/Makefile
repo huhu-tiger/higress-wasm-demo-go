@@ -21,9 +21,10 @@ clean_build:
 
 
 deploy: build
-	ssh -p 50022 172.22.221.214 'mkdir -p /data/work/deploy/AgenSpace/plugin-server/plugins/Transformer-go/1.0.0 && chmod 755 /data/work/deploy/AgenSpace/plugin-server/plugins/Transformer-go/1.0.0'
-	scp -P 50022 main.wasm 172.22.221.214:/data/work/deploy/AgenSpace/plugin-server/plugins/Transformer-go/1.0.0/plugin.wasm
+	ssh -p 50022 172.22.221.214 'mkdir -p /data/work/deploy/AgenSpace/plugin-server/plugins/transformer-vnet/1.0.0 && chmod 755 /data/work/deploy/AgenSpace/plugin-server/plugins/transformer-vnet/1.0.0'
+	scp -P 50022 main.wasm 172.22.221.214:/data/work/deploy/AgenSpace/plugin-server/plugins/transformer-vnet/1.0.0/plugin.wasm
 	ssh -p 50022 172.22.221.214 'pushd /data/work/deploy/AgenSpace/plugin-server && python3 generate_metadata.py'
+	
 
 # all: 执行 dev.sh 中的所有逻辑
 all: build

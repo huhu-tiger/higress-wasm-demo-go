@@ -12,7 +12,7 @@ services:
     ports:
     - "10000:10000"
     volumes:
-    - ./t2i/envoy-qwen.yaml:/etc/envoy/envoy.yaml
+    - ./t2i/envoy.yaml:/etc/envoy/envoy.yaml
     - ./main.wasm:/etc/envoy/main.wasm
 
   httpbin:
